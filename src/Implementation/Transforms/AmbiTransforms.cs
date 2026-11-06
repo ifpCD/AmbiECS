@@ -6,15 +6,16 @@ using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 using UnityEngine.Jobs;
 
+// p3 todo: can't put my finger, but I don't like how the JobHandle pipe is structured here.
 [NoAutoStaticsCleanup]
-public static class AmbiTransforms
+public static partial class AmbiTransformHandler
 {
     static readonly Dictionary<EntityId, AmbiTransform> _byTransform = new(HC.MAX_AMBI_TRANSFORMS);
     static readonly Scheduling _scheduling = new();
 
     static JobHandle _resolved;
     static bool _resolvedThisFrame;
-
+//
     public static AmbiTransform Acquire(Transform transform)
     {
         if (transform == null)
@@ -51,7 +52,7 @@ public static class AmbiTransforms
 
             _resolvedThisFrame = true;
 
-            if (AmbiTransform.CompletelyInactive)
+            if (AmbiTransform.IsEmpty)
                 return _resolved = default;
 
             // csharpier-ignore
@@ -75,14 +76,14 @@ public static class AmbiTransforms
                 Rotations         = AmbiTransform.Rotations,
                 LocalToWorlds     = AmbiTransform.LocalToWorlds,
                 Follows           = AmbiTransform.Follows,
-            }.Schedule(AmbiTransform.ActiveCount, 64, read);
+            }.Schedule(AmbiTransform.RowCount, 64, read);
         }
     }
 
     // csharpier-ignore
     public static JobHandle GatherPositions(NativeArray<AmbiHandle> handles, int count, NativeArray<float3> positions, JobHandle dependency = default)
     {
-        if (count == 0 || AmbiTransform.CompletelyInactive)
+        if (count == 0 || AmbiTransform.IsEmpty)
             return dependency;
 
         return new GatherPositionsJob
@@ -98,7 +99,7 @@ public static class AmbiTransforms
     // csharpier-ignore
     public static JobHandle GatherLocalToWorlds(NativeArray<AmbiHandle> handles, int count, NativeArray<float4x4> localToWorlds, JobHandle dependency = default)
     {
-        if (count == 0 || AmbiTransform.CompletelyInactive)
+        if (count == 0 || AmbiTransform.IsEmpty)
             return dependency;
 
         return new GatherLocalToWorldsJob
@@ -127,15 +128,10 @@ public static class AmbiTransforms
         }
     }
 
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterAssembliesLoaded)]
-    static void BeginPlaying()
-    {
-        AmbiScheduler.Subscribe(_scheduling);
+    [OnEnteringPlayMode]
+    static void BeginPlaying() => AmbiScheduler.Subscribe(_scheduling);
 
-        Application.quitting -= EndPlaying;
-        Application.quitting += EndPlaying;
-    }
-
+    [OnExitingPlayMode]
     static void EndPlaying()
     {
         foreach (AmbiTransform row in AmbiTransform.Registered)

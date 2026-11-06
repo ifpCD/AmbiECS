@@ -7,14 +7,11 @@ using UnityEngine.Jobs;
 [BurstCompile]
 internal struct ReadTransformsJob : IJobParallelForTransform
 {
-    [WriteOnly]
-    public NativeArray<float3> Positions;
-
-    [WriteOnly]
-    public NativeArray<quaternion> Rotations;
-
-    [WriteOnly]
-    public NativeArray<float4x4> LocalToWorlds;
+    // csharpier-ignore-start
+    [WriteOnly] public NativeArray<float3> Positions;
+    [WriteOnly] public NativeArray<quaternion> Rotations;
+    [WriteOnly] public NativeArray<float4x4> LocalToWorlds;
+    // csharpier-ignore-end
 
     public void Execute(int index, TransformAccess transform)
     {
@@ -30,32 +27,18 @@ internal struct ReadTransformsJob : IJobParallelForTransform
 [BurstCompile]
 internal struct ResolveTransformsJob : IJobParallelFor
 {
-    [ReadOnly]
-    public AmbiLookup Rows;
+    // csharpier-ignore-start
+    [ReadOnly] public AmbiLookup Rows;
+    [ReadOnly] public NativeArray<AmbiHandle> Leaders;
+    [ReadOnly] public NativeArray<float3> ReadPositions;
+    [ReadOnly] public NativeArray<quaternion> ReadRotations;
+    [ReadOnly] public NativeArray<float4x4> ReadLocalToWorlds;
 
-    [ReadOnly]
-    public NativeArray<AmbiHandle> Leaders;
-
-    [ReadOnly]
-    public NativeArray<float3> ReadPositions;
-
-    [ReadOnly]
-    public NativeArray<quaternion> ReadRotations;
-
-    [ReadOnly]
-    public NativeArray<float4x4> ReadLocalToWorlds;
-
-    [WriteOnly]
-    public NativeArray<float3> Positions;
-
-    [WriteOnly]
-    public NativeArray<quaternion> Rotations;
-
-    [WriteOnly]
-    public NativeArray<float4x4> LocalToWorlds;
-
-    [WriteOnly]
-    public NativeArray<bool> Follows;
+    [WriteOnly] public NativeArray<float3> Positions;
+    [WriteOnly] public NativeArray<quaternion> Rotations;
+    [WriteOnly] public NativeArray<float4x4> LocalToWorlds;
+    [WriteOnly] public NativeArray<bool> Follows;
+    // csharpier-ignore-end
 
     public void Execute(int row)
     {
@@ -84,20 +67,13 @@ internal struct ResolveTransformsJob : IJobParallelFor
 [BurstCompile]
 internal struct WriteDrivenTransformsJob : IJobParallelForTransform
 {
-    [ReadOnly]
-    public NativeArray<AmbiHandle> DrivenRows;
-
-    [ReadOnly]
-    public AmbiLookup Rows;
-
-    [ReadOnly]
-    public NativeArray<bool> Follows;
-
-    [ReadOnly]
-    public NativeArray<float3> Positions;
-
-    [ReadOnly]
-    public NativeArray<quaternion> Rotations;
+    // csharpier-ignore-start
+    [ReadOnly] public NativeArray<AmbiHandle> DrivenRows;
+    [ReadOnly] public AmbiLookup Rows;
+    [ReadOnly] public NativeArray<bool> Follows;
+    [ReadOnly] public NativeArray<float3> Positions;
+    [ReadOnly] public NativeArray<quaternion> Rotations;
+    // csharpier-ignore-end
 
     public void Execute(int index, TransformAccess transform)
     {
@@ -108,20 +84,18 @@ internal struct WriteDrivenTransformsJob : IJobParallelForTransform
     }
 }
 
+// indirection resolving jobs
+
 [BurstCompile]
 internal struct GatherPositionsJob : IJobParallelFor
 {
-    [ReadOnly]
-    public NativeArray<AmbiHandle> Handles;
+    // csharpier-ignore-start
+    [ReadOnly] public NativeArray<AmbiHandle> Handles;
+    [ReadOnly] public AmbiLookup Rows;
+    [ReadOnly] public NativeArray<float3> RowPositions;
 
-    [ReadOnly]
-    public AmbiLookup Rows;
-
-    [ReadOnly]
-    public NativeArray<float3> RowPositions;
-
-    [WriteOnly]
-    public NativeArray<float3> Positions;
+    [WriteOnly] public NativeArray<float3> Positions;
+    // csharpier-ignore-end
 
     public void Execute(int index)
     {
@@ -133,17 +107,13 @@ internal struct GatherPositionsJob : IJobParallelFor
 [BurstCompile]
 internal struct GatherLocalToWorldsJob : IJobParallelFor
 {
-    [ReadOnly]
-    public NativeArray<AmbiHandle> Handles;
+    // csharpier-ignore-start
+    [ReadOnly] public NativeArray<AmbiHandle> Handles;
+    [ReadOnly] public AmbiLookup Rows;
+    [ReadOnly] public NativeArray<float4x4> RowLocalToWorlds;
 
-    [ReadOnly]
-    public AmbiLookup Rows;
-
-    [ReadOnly]
-    public NativeArray<float4x4> RowLocalToWorlds;
-
-    [WriteOnly]
-    public NativeArray<float4x4> LocalToWorlds;
+    [WriteOnly] public NativeArray<float4x4> LocalToWorlds;
+    // csharpier-ignore-end
 
     public void Execute(int index)
     {

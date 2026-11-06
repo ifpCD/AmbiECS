@@ -16,27 +16,25 @@ public abstract class AmbiBase<T> : IAmbiRegistrant
     internal static AmbiRegistry<T>.Registrations Registered => default;
     public static int RegisteredCount => AmbiRegistry<T>.RegisteredCount;
 
-    public static int ActiveCount => AmbiRegistry<T>.ActiveCount;
-    public static bool CompletelyInactive => AmbiRegistry<T>.ActiveCount == 0;
+    public static int RowCount => AmbiRegistry<T>.RowCount;
+    public static bool IsEmpty => AmbiRegistry<T>.RowCount == 0;
 
     public AmbiHandle Handle => AmbiRegistry<T>.HandleOf((T)this);
     public bool IsRegistered => _slot.Registered >= 0;
     internal int SoAIndex => _slot.SoAIndex;
 
-    protected abstract int AllocatedCapacity { get; }
-    protected virtual bool RetainNativeWhenEmpty => false;
+    protected abstract int PreallocatedCapacity { get; }
+    protected virtual bool RetainColumnsWhenEmpty => false;
 
-    protected abstract void AllocateNative();
+    protected abstract void AllocateColumns();
 
-    protected abstract void DeallocateNative();
+    protected abstract void DeallocateColumns();
 
-    protected abstract void RemoveAtSwapBack(int removedIndex, int lastIndex);
+    protected abstract void SwapBackRow(int removedIndex, int lastIndex);
 
-    protected virtual void LoadObjectToArrays() { }
+    protected virtual void LoadObjectToRow() { }
 
-    protected virtual void SyncObjectToArrays() { }
-
-    protected static void DisposeRegistry() => AmbiRegistry<T>.Dispose();
+    protected virtual void SyncObjectToRow() { }
 
     internal void Register() => AmbiRegistry<T>.Register((T)this);
 
@@ -45,22 +43,21 @@ public abstract class AmbiBase<T> : IAmbiRegistrant
     internal void MarkDirty() => AmbiRegistry<T>.MarkDirty((T)this);
 
     // Equivalent of MonoBehaviour's OnDestroy: whoever drops it for good calls this to retire its handle.
-    // Maybe invoke in finalizer?
     internal void Release() => AmbiRegistry<T>.Destroy((T)this);
 
     ref AmbiSlot IAmbiRegistrant.Slot => ref _slot;
 
-    int IAmbiRegistrant.Capacity => AllocatedCapacity;
+    int IAmbiRegistrant.PreallocatedCapacity => PreallocatedCapacity;
 
-    bool IAmbiRegistrant.RetainsNative => RetainNativeWhenEmpty;
+    bool IAmbiRegistrant.RetainsColumnsWhenEmpty => RetainColumnsWhenEmpty;
 
-    void IAmbiRegistrant.Allocate() => AllocateNative();
+    void IAmbiRegistrant.Allocate() => AllocateColumns();
 
-    void IAmbiRegistrant.Deallocate() => DeallocateNative();
+    void IAmbiRegistrant.Deallocate() => DeallocateColumns();
 
-    void IAmbiRegistrant.SwapBack(int removedIndex, int lastIndex) => RemoveAtSwapBack(removedIndex, lastIndex);
+    void IAmbiRegistrant.SwapBack(int removedIndex, int lastIndex) => SwapBackRow(removedIndex, lastIndex);
 
-    void IAmbiRegistrant.Load() => LoadObjectToArrays();
+    void IAmbiRegistrant.Load() => LoadObjectToRow();
 
-    void IAmbiRegistrant.Sync() => SyncObjectToArrays();
+    void IAmbiRegistrant.Sync() => SyncObjectToRow();
 }

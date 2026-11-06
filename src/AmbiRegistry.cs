@@ -5,8 +5,8 @@ using Unity.Scripting.LifecycleManagement;
 internal interface IAmbiRegistrant
 {
     ref AmbiSlot Slot { get; }
-    int Capacity { get; }
-    bool RetainsNative { get; }
+    int PreallocatedCapacity { get; }
+    bool RetainsColumnsWhenEmpty { get; }
 
     void Allocate();
     void Deallocate();
@@ -15,6 +15,22 @@ internal interface IAmbiRegistrant
     void Sync();
 }
 
+// The dense SoA registry of one Ambi type, shared by AmbiMonoBehaviour<T> and AmbiBase<T>.
+//
+// Two views of the same objects, each for one side:
+// Registered: the objects registered right now, for main-thread code. Requests change it at once, so it never holds an object
+// that has left or been destroyed, and Register counts against capacity there, throwing at its caller, never inside a flush.
+// Rows: the objects the graph reads, packed in [0, ActiveCount), removed by swap-back.
+// Each request queues its object once, and rows change only when AmbiScheduler flushes the queues. 
+// Load fills a new row and Sync rewrites a row from its object; both run at the flush, write that row and nothing else, and issue no requests.
+// Columns are conditionally freed when a drain leaves the type empty.
+//
+// Identities: an AmbiHandle names an object from the first read of its Handle until it is destroyed, whatever its registration in between.
+// HandleToSoA[identity] is its row or -1, and HandleVersions retires the handle on destruction.
+// Versions start at 1 (0 is Null) and outlive the table, so a recycled slot never reissues a handle someone still holds.
+// AmbiHandle is used to inter-link managed IAmbiRegistrant instances in the narive DOD paradigm via indirection using AmbiLookup
+//
+// Nothing is allocated per request: Registered, the rows, the identities and the queue are all sized from the type's capacity.
 [NoAutoStaticsCleanup]
 internal static class AmbiRegistry<T>
     where T : class, IAmbiRegistrant
@@ -24,7 +40,7 @@ internal static class AmbiRegistry<T>
     static int _visits; // stamps the walks over Registered
 
     internal static T[] Rows;
-    internal static int ActiveCount;
+    internal static int RowCount;
     static int _rowCapacity;
     static T _allocationOwner;
 
@@ -41,6 +57,8 @@ internal static class AmbiRegistry<T>
 
     internal static AmbiLookup Lookup => new() { HandleToSoA = HandleToSoA, HandleVersions = HandleVersions };
 
+    static AmbiRegistry() => AmbiScheduler.Enlist(Depart, Arrive, Dispose);
+
     internal static void Register(T instance)
     {
         ref AmbiSlot slot = ref instance.Slot;
@@ -48,7 +66,7 @@ internal static class AmbiRegistry<T>
         if (slot.Registered >= 0 || (slot.Flags & AmbiSlot.DESTROYED) != 0)
             return;
 
-        int capacity = instance.Capacity;
+        int capacity = instance.PreallocatedCapacity;
 
         if (RegisteredCount >= capacity)
             throw new InvalidOperationException($"{typeof(T).Name} capacity of {capacity} exceeded.");
@@ -117,23 +135,24 @@ internal static class AmbiRegistry<T>
         return new AmbiHandle { Index = slot.Identity, Version = _versions[slot.Identity] };
     }
 
-    // Teardown: every object leaves, those still waiting to arrive included, once the graph that reads the rows is done.
-    internal static void Dispose()
+    // Code unload, once the graph is done: every object leaves, those still waiting to arrive included, and the identity table goes
+    // with the rows whatever handles are still out, since no code is left to resolve them.
+    static void Dispose()
     {
-        AmbiScheduler.Complete();
-
         while (RegisteredCount != 0)
             Unregister(ref _registered[RegisteredCount - 1].Slot);
 
         Drain();
 
-        while (ActiveCount != 0)
+        while (RowCount != 0)
         {
-            T instance = Rows[ActiveCount - 1];
+            T instance = Rows[RowCount - 1];
             Apply(instance, ref instance.Slot);
         }
 
         DisposeRows();
+        HandleToSoA.DisposeIfAllocated();
+        HandleVersions.DisposeIfAllocated();
     }
 
     // Out of Registered at once, by swap-back.
@@ -164,7 +183,7 @@ internal static class AmbiRegistry<T>
             return;
 
         if (_queueCount == 0)
-            SizeQueue(instance.Capacity);
+            SizeQueue(instance.PreallocatedCapacity);
         else if (_queueCount == _queue.Length)
         {
             // more objects changed than even a scene swap changes: land the queue now, waiting for the graph if it runs, rather
@@ -181,12 +200,8 @@ internal static class AmbiRegistry<T>
     // that a capacity configured per session (sources) is followed.
     static void SizeQueue(int capacity)
     {
-        if (_queue == null)
-            AmbiScheduler.Enlist(Depart, Arrive);
-        else if (_queue.Length >= 2 * capacity)
-            return;
-
-        _queue = new T[2 * capacity];
+        if (_queue == null || _queue.Length < 2 * capacity)
+            _queue = new T[2 * capacity];
     }
 
     // This type alone, outside a flush: teardown, and a full queue.
@@ -258,11 +273,11 @@ internal static class AmbiRegistry<T>
     {
         Initialize(instance);
 
-        if (ActiveCount == _rowCapacity)
+        if (RowCount == _rowCapacity)
             throw new InvalidOperationException($"{typeof(T).Name} capacity of {_rowCapacity} exceeded.");
 
-        slot.SoAIndex = ActiveCount;
-        Rows[ActiveCount++] = instance;
+        slot.SoAIndex = RowCount;
+        Rows[RowCount++] = instance;
 
         instance.Load();
         instance.Sync();
@@ -271,7 +286,7 @@ internal static class AmbiRegistry<T>
     static void RemoveRow(T instance, ref AmbiSlot slot)
     {
         int removedIndex = slot.SoAIndex;
-        int lastIndex = --ActiveCount;
+        int lastIndex = --RowCount;
 
         if (removedIndex != lastIndex)
         {
@@ -294,13 +309,13 @@ internal static class AmbiRegistry<T>
     // reattached, keeps its columns.
     static void ReleaseRowsIfEmpty()
     {
-        if (ActiveCount == 0 && Rows != null && !_allocationOwner.RetainsNative)
+        if (RowCount == 0 && Rows != null && !_allocationOwner.RetainsColumnsWhenEmpty)
             DisposeRows();
     }
 
     static void AcquireIdentity(T instance, ref AmbiSlot slot)
     {
-        EnsureIdentities(instance.Capacity);
+        EnsureIdentities(instance.PreallocatedCapacity);
 
         if (_freeIdentityCount > 0)
             slot.Identity = _freeIdentities[--_freeIdentityCount];
@@ -347,7 +362,7 @@ internal static class AmbiRegistry<T>
         if (Rows != null)
             return;
 
-        int capacity = owner.Capacity;
+        int capacity = owner.PreallocatedCapacity;
         EnsureIdentities(capacity);
 
         _rowCapacity = capacity;
@@ -407,12 +422,20 @@ internal static class AmbiRegistry<T>
         if (_liveIdentities != 0 || Rows != null)
             return;
 
-        HandleToSoA.TryDispose();
-        HandleVersions.TryDispose();
+        HandleToSoA.DisposeIfAllocated();
+        HandleVersions.DisposeIfAllocated();
     }
 
-    // The objects registered right now, for main-thread code. Any request is safe while walking them: each object registered
+    // Mutation-tolerant, swap-back-aware enumerator.
+    // Uses reverse traversal and per-object visit stamps to prevent
+    // duplicate visits when registrations change during iteration.
+    // 
+    // Essentially: The objects registered right now, for main-thread code.
+    // Any request is safe while walking them: each object registered
     // throughout is yielded exactly once, one that leaves first is never yielded, and one that arrives meanwhile may be.
+    //
+    // Intended primarily for culling passes inside IAmbiSystem.BeforeFlush
+    // but can be used elsewhere as long as AmbiScheduler.Complete() is invoked prior.
     internal readonly struct Registrations
     {
         public Enumerator GetEnumerator() => new(++_visits);
@@ -430,7 +453,7 @@ internal static class AmbiRegistry<T>
                 _current = null;
             }
 
-            public T Current => _current;
+            public readonly T Current => _current;
 
             // Backwards: an object that leaves is replaced by the last one, which is already behind us. Only when the one leaving is
             // still ahead does the last one move ahead again, and its stamp skips it.
