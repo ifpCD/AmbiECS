@@ -9,7 +9,7 @@ namespace AmbiECS;
 
 public interface IAmbiSystem
 {
-    void BeforeFlush();
+    void BeforeFlush() { }
 
     JobHandle Schedule();
 }
@@ -22,7 +22,7 @@ public interface IAmbiSystem
 // For scheduling, you implement IAmbiSystem and subscribe it to the AmbiScheduler
 //
 // Sometimes (for culling for example) - you will want to check what instances are about to go into the scheduled system, and see if some could be culled
-// For that, you implement BeforeFlush, and iterate over IAmbiRegistrant<T>.Registered (unlike DOD, it's not deferred) and deregister.
+// For that, you implement BeforeFlush, and iterate over T.Registered (unlike DOD, it's not deferred) and deregister.
 //
 // Given certain Unity's editor callbacks not having a guaranteed point in the execution model (OnDrawGizmos for example):
 // One issue of deferred sync approach is that any kind of introspection into the ECS DOD state from an arbitrary thread at a random time will require us to pre-emptively complete the entire graph
@@ -49,10 +49,8 @@ public static partial class AmbiScheduler
     static readonly IAmbiSystem[] _systems = new IAmbiSystem[8];
     static int _systemCount;
 
-    // one triple per Ambi type, enlisted the first time the type is touched
-    static readonly Action[] _departures = new Action[32];
-    static readonly Action[] _arrivals = new Action[32];
-    static readonly Action[] _disposals = new Action[32];
+    // one entry per Ambi type, enlisted the first time the type is touched
+    static (Action Depart, Action Arrive, Action Dispose)[] _registries = new (Action, Action, Action)[32];
     static int _registryCount;
 
     internal static bool Defers => _deferring;
@@ -93,11 +91,12 @@ public static partial class AmbiScheduler
         _busy = false;
     }
 
-    internal static void Enlist(Action departures, Action arrivals, Action disposal)
+    internal static void Enlist(Action depart, Action arrive, Action dispose)
     {
-        _departures[_registryCount] = departures;
-        _arrivals[_registryCount] = arrivals;
-        _disposals[_registryCount++] = disposal;
+        if (_registryCount == _registries.Length)
+            Array.Resize(ref _registries, 2 * _registryCount);
+
+        _registries[_registryCount++] = (depart, arrive, dispose);
     }
 
     // A system that throws is logged and skipped, like a MonoBehaviour: one failure never stops the flush or the other systems.
@@ -155,16 +154,15 @@ public static partial class AmbiScheduler
         JobHandle.ScheduleBatchedJobs();
     }
 
-    // Every type's departures land before any type's arrivals: the rows never outnumber what Register counted, and a Sync reading a
-    // Handle never finds the identity slots held by objects destroyed in the same frame. A Load or Sync issues no requests, so one
-    // pass lands everything.
+    // Every type's departures land before any type's arrivals: a sync reading a Handle never finds the identity slots held by
+    // objects destroyed in the same frame. A LoadRow or SyncRow issues no requests, so one pass lands everything.
     static void Flush()
     {
         for (int i = 0; i < _registryCount; i++)
-            _departures[i]();
+            _registries[i].Depart();
 
         for (int i = 0; i < _registryCount; i++)
-            _arrivals[i]();
+            _registries[i].Arrive();
     }
 
     // A session runs from entering Play mode, to exiting it, and a code reload in Play mode ends one session and starts the next.
@@ -207,7 +205,7 @@ public static partial class AmbiScheduler
         Complete();
 
         for (int i = 0; i < _registryCount; i++)
-            _disposals[i]();
+            _registries[i].Dispose();
     }
 
     // Puts a system into phase right after `after`: first when `after` is null, last when the phase lacks it. False if already there.

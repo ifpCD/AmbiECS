@@ -109,7 +109,7 @@ internal struct GatherPositionsJob : IJobParallelFor
 }
 
 [BurstCompile]
-internal struct GatherLocalToWorlds : IJobParallelFor
+internal struct GatherLocalToWorldsJob : IJobParallelFor
 {
     // csharpier-ignore-start
     [ReadOnly] public NativeArray<AmbiHandle> Handles;
@@ -135,11 +135,11 @@ internal struct GatherAllTransformData : IJobParallelFor
 
     [ReadOnly] public NativeArray<float4x4> RowLocalToWorlds;
     [ReadOnly] public NativeArray<float3> RowPositions;
-    [ReadOnly] public NativeArray<float3> RowRotations;
+    [ReadOnly] public NativeArray<quaternion> RowRotations;
 
     [WriteOnly] public NativeArray<float4x4> LocalToWorlds;
     [WriteOnly] public NativeArray<float3> Positions;
-    [WriteOnly] public NativeArray<float3> Rotations;
+    [WriteOnly] public NativeArray<quaternion> Rotations;
     // csharpier-ignore-end
 
     public void Execute(int index)

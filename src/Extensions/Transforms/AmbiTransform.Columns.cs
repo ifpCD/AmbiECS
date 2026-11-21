@@ -1,3 +1,4 @@
+using System;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine.Jobs;
@@ -6,83 +7,48 @@ namespace AmbiECS.Extensions;
 
 public sealed partial class AmbiTransform
 {
-    internal const int HARDCODED_MAXIMUM_AMBI_TRANSFORMS = 16384;
-
-    protected override int PreallocatedCapacity => HARDCODED_MAXIMUM_AMBI_TRANSFORMS;
-
-    // what the gather reads, every frame
+    [Input(LoadOnly = true)]
     internal static TransformAccessArray Transforms;
-    internal static NativeArray<float3> ReadPositions;
-    internal static NativeArray<quaternion> ReadRotations;
-    internal static NativeArray<float4x4> ReadLocalToWorlds;
 
+    [Input]
     internal static NativeArray<AmbiHandle> Leaders;
 
-    // the pose everything reads: the row's own, or its leader's while it follows one
-    internal static NativeArray<float3> Positions;
-    internal static NativeArray<quaternion> Rotations;
-    internal static NativeArray<float4x4> LocalToWorlds;
-    internal static NativeArray<bool> Follows;
+    // in row order: the transforms the gather reads every frame, and each row's leader
+    // rewritten from the transforms every frame, so never carried along with their rows: the raw reads, and the pose everything
+    // reads (the row's own, or its leader's while it follows one)
+    // csharpier-ignore-start
+    [Scratch] internal static NativeArray<float3>     ReadPositions;
+    [Scratch] internal static NativeArray<quaternion> ReadRotations;
+    [Scratch] internal static NativeArray<float4x4>   ReadLocalToWorlds;
+    [Scratch] internal static NativeArray<float3>     Positions;
+    [Scratch] internal static NativeArray<quaternion> Rotations;
+    [Scratch] internal static NativeArray<float4x4>   LocalToWorlds;
+    [Scratch] internal static NativeArray<bool>       Follows;
+    // csharpier-ignore-end
 
+    // the rows that follow a leader, in an order of their own: kept by hand through the column hooks
     internal static TransformAccessArray DrivenTransforms;
     internal static NativeArray<AmbiHandle> DrivenRows;
     static AmbiTransform[] _driven;
 
-    // csharpier-ignore
-    protected override void AllocateColumns()
+    static partial void OnColumnsAllocated(int capacity)
     {
-        Transforms        = new(PreallocatedCapacity);
-        ReadPositions     = new(PreallocatedCapacity, Allocator.Persistent);
-        ReadRotations     = new(PreallocatedCapacity, Allocator.Persistent);
-        ReadLocalToWorlds = new(PreallocatedCapacity, Allocator.Persistent);
-
-        Leaders           = new(PreallocatedCapacity, Allocator.Persistent);
-
-        Positions         = new(PreallocatedCapacity, Allocator.Persistent);
-        Rotations         = new(PreallocatedCapacity, Allocator.Persistent);
-        LocalToWorlds     = new(PreallocatedCapacity, Allocator.Persistent);
-        Follows           = new(PreallocatedCapacity, Allocator.Persistent);
-
-        DrivenTransforms  = new(PreallocatedCapacity);
-        DrivenRows        = new(PreallocatedCapacity, Allocator.Persistent);
-        _driven           = new AmbiTransform[PreallocatedCapacity];
+        DrivenTransforms = new(capacity);
+        DrivenRows = new(capacity, Allocator.Persistent);
+        _driven = new AmbiTransform[capacity];
     }
 
-    protected override void DeallocateColumns()
+    static partial void OnColumnsResized(int rowCount, int capacity)
     {
-        Transforms.Dispose();
-        ReadPositions.Dispose();
-        ReadRotations.Dispose();
-        ReadLocalToWorlds.Dispose();
+        DrivenTransforms.capacity = capacity;
+        DrivenRows.Resize(capacity);
+        Array.Resize(ref _driven, capacity);
+    }
 
-        Leaders.Dispose();
-
-        Positions.Dispose();
-        Rotations.Dispose();
-        LocalToWorlds.Dispose();
-        Follows.Dispose();
-
+    static partial void OnColumnsDeallocating()
+    {
         DrivenTransforms.Dispose();
         DrivenRows.Dispose();
         _driven = null;
-    }
-
-    protected override void LoadObjectToRow() => Transforms.Add(Target);
-
-    protected override void SyncObjectToRow()
-    {
-        Leaders[SoAIndex] = _leader?.Handle ?? AmbiHandle.Null;
-
-        if (_leader != null && _drivenIndex < 0)
-            Drive();
-    }
-
-    protected override void SwapBackRow(int removedIndex, int lastIndex)
-    {
-        Transforms.RemoveAtSwapBack(removedIndex);
-        Leaders[removedIndex] = Leaders[lastIndex];
-
-        if (_drivenIndex >= 0)
-            Undrive();
     }
 }

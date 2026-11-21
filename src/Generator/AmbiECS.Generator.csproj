@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The one project not on net10.0: Roslyn loads generators into whichever compiler hosts the build (dotnet, Visual Studio,
+       Rider, Unity), so it stays on netstandard2.0 and on the oldest Roslyn Unity accepts, which still runs inside the newer
+       compiler that brings C# 14. It references nothing from Unity or Core. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+
+    <NoWarn>IDE0130</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.1" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

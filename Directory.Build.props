@@ -1,6 +1,6 @@
 <Project>
     <PropertyGroup>
-        <UnityEditorDir>C:\Program Files\Unity\Hub\Editor\6000.7.0b1</UnityEditorDir>
+        <UnityEditorDir>C:\Program Files\Unity\Hub\Editor\7000.0.0a12</UnityEditorDir>
         <UnityManaged>$(UnityEditorDir)\Editor\Data\Managed\UnityEngine</UnityManaged>
     </PropertyGroup>
 </Project>

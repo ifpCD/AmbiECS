@@ -13,13 +13,15 @@ namespace AmbiECS.Extensions;
 [NoAutoStaticsCleanup]
 public static partial class AmbiTransformHandler
 {
-    static readonly Dictionary<EntityId, AmbiTransform> _byTransform = new(AmbiTransform.HARDCODED_MAXIMUM_AMBI_TRANSFORMS);
+    static readonly Dictionary<EntityId, AmbiTransform> _byTransform = new(
+        AmbiTransform.CACHE_BUDGET
+    );
     static readonly Scheduling _scheduling = new();
 
     static JobHandle _resolved;
     static bool _resolvedThisFrame;
 
-    public static AmbiTransform Acquire(UnityEngine.Transform transform)
+    public static AmbiTransform Acquire(Transform transform)
     {
         if (transform == null)
             return null;
@@ -28,7 +30,7 @@ public static partial class AmbiTransformHandler
 
         if (!_byTransform.TryGetValue(key, out AmbiTransform row))
         {
-            if (AmbiTransform.RegisteredCount == AmbiTransform.HARDCODED_MAXIMUM_AMBI_TRANSFORMS)
+            if (AmbiTransform.RegisteredCount == AmbiTransform.CACHE_BUDGET)
                 EvictUnheld();
 
             row = new AmbiTransform(transform, key);
@@ -105,7 +107,7 @@ public static partial class AmbiTransformHandler
         if (count == 0 || AmbiTransform.IsEmpty)
             return dependency;
 
-        return new GatherAllTransformData
+        return new GatherLocalToWorldsJob
         {
             Handles          = handles,
             Rows             = AmbiTransform.Lookup,
