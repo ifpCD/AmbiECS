@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Unity.Collections;
-using UnityEngine;
+
+namespace AmbiECS;
 
 // What the column attributes expand to, written by hand until the [AmbiSync] generator exists. Stateless, allocation-free, and
 // only ever called from LoadObjectToRow, SyncObjectToRow and SwapBackRow, while the job graph is idle.
@@ -45,18 +46,5 @@ internal static class AmbiRefs
 
         for (; slot < stride; slot++)
             column[start + slot] = AmbiHandle.Null;
-    }
-
-    // [AmbiRefStride] OnValidate: caps the authoring list at its stride. Only ever shrinks it.
-    public static void ClampStride<TTarget>(List<TTarget> targets, int stride, Object context)
-    {
-        if (targets.Count <= stride)
-            return;
-
-#if UNITY_EDITOR
-        Debug.LogWarning($"{context.name}: at most {stride} {typeof(TTarget).Name} references; removed the last {targets.Count - stride}.", context);
-#endif
-
-        targets.RemoveRange(stride, targets.Count - stride);
     }
 }

@@ -5,6 +5,8 @@ using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 using UnityEngine.LowLevel;
 
+namespace AmbiECS;
+
 public interface IAmbiSystem
 {
     void BeforeFlush();

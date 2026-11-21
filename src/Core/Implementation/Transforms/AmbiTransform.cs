@@ -1,6 +1,8 @@
 using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 
+namespace AmbiECS;
+
 // instead of doing TransformAccessArray on each instance of an arbitrary Ambi component
 // we instead have a reference counted shared transform access class called AmbiTransform
 // essentially - whenever a MonoBehaviour component needs to know its transform data

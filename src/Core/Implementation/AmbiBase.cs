@@ -1,6 +1,8 @@
 using Unity.Collections;
 using Unity.Scripting.LifecycleManagement;
 
+namespace AmbiECS;
+
 // A plain C# object with a row in the dense SoA registry of T while registered, and a Handle for its whole life, for rows that are
 // not components of their own, such as a generator's kind rows. Same contract as AmbiMonoBehaviour<T>.
 [NoAutoStaticsCleanup]

@@ -1,3 +1,5 @@
+namespace AmbiECS;
+
 // Where one Ambi object stands. Lives in the object; the registry reaches it by reference.
 internal struct AmbiSlot
 {

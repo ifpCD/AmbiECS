@@ -1,10 +1,13 @@
 using System.Collections.Generic;
+using AmbiECS.Jobs;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 using UnityEngine.Jobs;
+
+namespace AmbiECS;
 
 // p3 todo: can't put my finger, but I don't like how the JobHandle pipe is structured here.
 [NoAutoStaticsCleanup]

@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using Unity.Collections;
 
+namespace AmbiECS;
+
 public struct AmbiLookup
 {
     [ReadOnly]

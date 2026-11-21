@@ -2,6 +2,8 @@ using System;
 using Unity.Collections;
 using Unity.Scripting.LifecycleManagement;
 
+namespace AmbiECS;
+
 internal interface IAmbiRegistrant
 {
     ref AmbiSlot Slot { get; }

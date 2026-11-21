@@ -1,8 +1,11 @@
+using System;
 using System.Collections.Generic;
+using AmbiECS.Extensions;
+using AmbiECS.Glue;
 using Unity.Collections;
 using UnityEngine;
 
-namespace Ambi;
+namespace AmbiECS.Example;
 
 [AmbiGenerated]
 internal partial class Foo : AmbiMonoBehaviour<Foo>
@@ -15,16 +18,16 @@ internal partial class Foo : AmbiMonoBehaviour<Foo>
     [InputBuffer]
     public static NativeArray<float> TargetVolumes;
 
-    [ScratchBuffer(AllocationCapacity: (ALLOC_SIZE + BAR_HANDLE_SIZE) * 2)]
+    [ScratchBuffer(allocationCapacity: ALLOC_SIZE * 131), ManualExpand]
     public static NativeArray<int> ArbitraryScratchBuffer;
 
     [InputBuffer, SkipPostLoadSync]
     public static float[] ConstantFactors;
 
-    [StatefulBuffer]
+    [StatefulBuffer(1f)]
     public static NativeArray<float> CurrentVolumes;
 
-    [InputBuffer(StrideCapacity: BAR_HANDLE_SIZE)]
+    [InputBuffer(strideCapacity: BAR_HANDLE_SIZE)]
     public static NativeArray<AmbiHandle> BarHandleStrides;
 
     [field: SerializeField]
@@ -43,19 +46,25 @@ internal partial class Foo : AmbiMonoBehaviour<Foo>
     public List<Bar> Bars = [];
 
     // Optionally declarable callbacks
-    static void OnPostAllocation() { }
+    static void OnAllocation() { }
 
-    static void OnPostDeallocation() { }
+    static void OnDeallocation() { }
 
-    void OnPostLoadObjectToRow() { }
+    void OnObjectLoadedToRow(int rowIndex) { }
 
-    void OnPostSyncObjectToRow() { }
+    void OnObjectSyncedToRow(int rowIndex) { }
 
-    static void OnPostSwapBackRow(int removedIndex, int lastIndex) { }
+    static void OnRowSwapBack(int removedIndex, int lastIndex) { }
+
+    static void OnCapacityIncreased(int newCapacity)
+    {
+        ArbitraryScratchBuffer.DisposeExpand(newCapacity * 131);
+    }
 }
 
 internal partial class Foo
 {
+    // generate if C# version is 14
     public partial float Volume
     {
         get;
@@ -72,16 +81,17 @@ internal partial class Foo
     protected override void AllocateColumns()
     {
         TargetVolumes = new(PreallocatedCapacity, Allocator.Persistent);
-        ArbitraryScratchBuffer = new((ALLOC_SIZE + BAR_HANDLE_SIZE) * 2, Allocator.Persistent);
-        ConstantFactors = [PreallocatedCapacity];
+        ArbitraryScratchBuffer = new(ALLOC_SIZE * 131, Allocator.Persistent);
+        ConstantFactors = new float[PreallocatedCapacity];
         CurrentVolumes = new(PreallocatedCapacity, Allocator.Persistent);
-        BarHandleStrides = new(ALLOC_SIZE + BAR_HANDLE_SIZE, Allocator.Persistent);
+        BarHandleStrides = new(PreallocatedCapacity * BAR_HANDLE_SIZE, Allocator.Persistent);
     }
 
     protected override void DeallocateColumns()
     {
         TargetVolumes.Dispose();
         ArbitraryScratchBuffer.Dispose();
+        ConstantFactors = null;
         CurrentVolumes.Dispose();
         BarHandleStrides.Dispose();
     }
@@ -89,6 +99,7 @@ internal partial class Foo
     protected override void LoadObjectToRow()
     {
         ConstantFactors[SoAIndex] = ConstantFactor;
+        CurrentVolumes[SoAIndex] = 1f;
     }
 
     protected override void SyncObjectToRow()
@@ -109,10 +120,16 @@ internal partial class Foo
 
     // during a main thread object registration overflow event,
     // copy all existing buffers into new buffers with double the previous capacity.
-    static void Resize() { }
+    static void IncreaseCapacity(int newCapacity)
+    {
+        TargetVolumes.DisposeExpand(newCapacity);
+        Array.Resize(ref ConstantFactors, newCapacity);
+        CurrentVolumes.DisposeExpand(newCapacity);
+        BarHandleStrides.DisposeExpand(newCapacity * BAR_HANDLE_SIZE);
+    }
 }
 
-[AmbiGenerated(AutoDirtyFlagging: false)]
+[AmbiGenerated, SkipAutoDirtyFlagging]
 internal partial class Bar : AmbiMonoBehaviour<Bar>
 {
     protected override int PreallocatedCapacity => 150;

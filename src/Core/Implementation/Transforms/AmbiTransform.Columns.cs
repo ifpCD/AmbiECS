@@ -2,6 +2,8 @@ using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine.Jobs;
 
+namespace AmbiECS;
+
 public sealed partial class AmbiTransform
 {
     internal const int HARDCODED_MAXIMUM_AMBI_TRANSFORMS = 16384;

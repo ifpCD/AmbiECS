@@ -2,6 +2,8 @@ using Unity.Collections;
 using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 
+namespace AmbiECS;
+
 // A MonoBehaviour with a row in the dense SoA registry of T while registered, and a Handle for its whole life (see AmbiRegistry).
 //
 // Nothing here waits for the job graph. Register, Deregister and MarkDirty take effect for main-thread code at once (IsRegistered,
