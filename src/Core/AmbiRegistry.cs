@@ -151,8 +151,8 @@ internal static class AmbiRegistry<T>
         }
 
         DisposeRows();
-        HandleToSoA.DisposeIfAllocated();
-        HandleVersions.DisposeIfAllocated();
+        HandleToSoA.Dispose();
+        HandleVersions.Dispose();
     }
 
     // Out of Registered at once, by swap-back.
@@ -422,8 +422,8 @@ internal static class AmbiRegistry<T>
         if (_liveIdentities != 0 || Rows != null)
             return;
 
-        HandleToSoA.DisposeIfAllocated();
-        HandleVersions.DisposeIfAllocated();
+        HandleToSoA.Dispose();
+        HandleVersions.Dispose();
     }
 
     // Mutation-tolerant, swap-back-aware enumerator.

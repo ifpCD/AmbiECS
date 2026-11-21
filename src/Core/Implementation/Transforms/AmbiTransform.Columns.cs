@@ -4,7 +4,9 @@ using UnityEngine.Jobs;
 
 public sealed partial class AmbiTransform
 {
-    protected override int PreallocatedCapacity => HC.MAX_AMBI_TRANSFORMS;
+    internal const int HARDCODED_MAXIMUM_AMBI_TRANSFORMS = 16384;
+
+    protected override int PreallocatedCapacity => HARDCODED_MAXIMUM_AMBI_TRANSFORMS;
     protected override bool RetainColumnsWhenEmpty => true;
 
     // what the gather reads, every frame
@@ -47,20 +49,20 @@ public sealed partial class AmbiTransform
 
     protected override void DeallocateColumns()
     {
-        Transforms.DisposeIfAllocated();
-        ReadPositions.DisposeIfAllocated();
-        ReadRotations.DisposeIfAllocated();
-        ReadLocalToWorlds.DisposeIfAllocated();
+        Transforms.Dispose();
+        ReadPositions.Dispose();
+        ReadRotations.Dispose();
+        ReadLocalToWorlds.Dispose();
 
-        Leaders.DisposeIfAllocated();
+        Leaders.Dispose();
 
-        Positions.DisposeIfAllocated();
-        Rotations.DisposeIfAllocated();
-        LocalToWorlds.DisposeIfAllocated();
-        Follows.DisposeIfAllocated();
+        Positions.Dispose();
+        Rotations.Dispose();
+        LocalToWorlds.Dispose();
+        Follows.Dispose();
 
-        DrivenTransforms.DisposeIfAllocated();
-        DrivenRows.DisposeIfAllocated();
+        DrivenTransforms.Dispose();
+        DrivenRows.Dispose();
         _driven = null;
     }
 

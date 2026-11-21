@@ -55,7 +55,11 @@ internal struct ResolveTransformsJob : IJobParallelFor
 
         float3 position = ReadPositions[leader];
         quaternion rotation = ReadRotations[leader];
-        float3 scale = new(math.length(own.c0.xyz), math.length(own.c1.xyz), math.length(own.c2.xyz));
+        float3 scale = new(
+            math.length(own.c0.xyz),
+            math.length(own.c1.xyz),
+            math.length(own.c2.xyz)
+        );
 
         Positions[row] = position;
         Rotations[row] = rotation;
@@ -84,8 +88,6 @@ internal struct WriteDrivenTransformsJob : IJobParallelForTransform
     }
 }
 
-// indirection resolving jobs
-
 [BurstCompile]
 internal struct GatherPositionsJob : IJobParallelFor
 {
@@ -105,7 +107,7 @@ internal struct GatherPositionsJob : IJobParallelFor
 }
 
 [BurstCompile]
-internal struct GatherLocalToWorldsJob : IJobParallelFor
+internal struct GatherLocalToWorlds : IJobParallelFor
 {
     // csharpier-ignore-start
     [ReadOnly] public NativeArray<AmbiHandle> Handles;
@@ -119,5 +121,32 @@ internal struct GatherLocalToWorldsJob : IJobParallelFor
     {
         if (Rows.TryResolve(Handles[index], out int row))
             LocalToWorlds[index] = RowLocalToWorlds[row];
+    }
+}
+
+[BurstCompile]
+internal struct GatherAllTransformData : IJobParallelFor
+{
+    // csharpier-ignore-start
+    [ReadOnly] public NativeArray<AmbiHandle> Handles;
+    [ReadOnly] public AmbiLookup Rows;
+
+    [ReadOnly] public NativeArray<float4x4> RowLocalToWorlds;
+    [ReadOnly] public NativeArray<float3> RowPositions;
+    [ReadOnly] public NativeArray<float3> RowRotations;
+
+    [WriteOnly] public NativeArray<float4x4> LocalToWorlds;
+    [WriteOnly] public NativeArray<float3> Positions;
+    [WriteOnly] public NativeArray<float3> Rotations;
+    // csharpier-ignore-end
+
+    public void Execute(int index)
+    {
+        if (Rows.TryResolve(Handles[index], out int row))
+        {
+            LocalToWorlds[index] = RowLocalToWorlds[row];
+            Positions[index] = RowPositions[row];
+            Rotations[index] = RowRotations[row];
+        }
     }
 }
