@@ -4,7 +4,7 @@ namespace AmbiECS.Extensions;
 
 public static class NativeArrayExtensions
 {
-    public static void DisposeExpand<T>(ref this NativeArray<T> array, int length)
+    public static void Resize<T>(ref this NativeArray<T> array, int length)
         where T : struct
     {
         if (array == default)

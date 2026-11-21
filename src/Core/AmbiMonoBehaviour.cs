@@ -38,7 +38,7 @@ public abstract class AmbiMonoBehaviour<T> : MonoBehaviour, IAmbiRegistrant
     internal int SoAIndex => _slot.SoAIndex;
 
     protected abstract int PreallocatedCapacity { get; }
-    protected virtual bool RetainColumnsWhenEmpty => false;
+    protected virtual bool RetainColumnsWhenEmpty => true;
 
     protected abstract void AllocateColumns();
 

@@ -2,14 +2,13 @@ using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine.Jobs;
 
-namespace AmbiECS;
+namespace AmbiECS.Extensions;
 
 public sealed partial class AmbiTransform
 {
     internal const int HARDCODED_MAXIMUM_AMBI_TRANSFORMS = 16384;
 
     protected override int PreallocatedCapacity => HARDCODED_MAXIMUM_AMBI_TRANSFORMS;
-    protected override bool RetainColumnsWhenEmpty => true;
 
     // what the gather reads, every frame
     internal static TransformAccessArray Transforms;

@@ -5,7 +5,7 @@ namespace AmbiECS;
 
 // What the column attributes expand to, written by hand until the [AmbiSync] generator exists. Stateless, allocation-free, and
 // only ever called from LoadObjectToRow, SyncObjectToRow and SwapBackRow, while the job graph is idle.
-internal static class AmbiColumn
+public static class AmbiColumn
 {
     // [AmbiStatefulStride] / [AmbiRefStride] SwapBackRow: the last row's block moves into the removed row.
     public static void SwapBack<TValue>(NativeArray<TValue> column, int removedIndex, int lastIndex, int stride = 1)
@@ -21,7 +21,7 @@ internal static class AmbiColumn
     }
 }
 
-internal static class AmbiRefs
+public static class AmbiRefs
 {
     // [AmbiRef]: the handle a reference column holds. Null for no target or a destroyed one.
     public static AmbiHandle HandleOf<TTarget>(TTarget target)

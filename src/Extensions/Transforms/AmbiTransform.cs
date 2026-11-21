@@ -1,7 +1,7 @@
 using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 
-namespace AmbiECS;
+namespace AmbiECS.Extensions;
 
 // instead of doing TransformAccessArray on each instance of an arbitrary Ambi component
 // we instead have a reference counted shared transform access class called AmbiTransform
@@ -21,14 +21,14 @@ public sealed partial class AmbiTransform : AmbiBase<AmbiTransform>
 {
     internal static int DrivenCount;
 
-    internal readonly Transform Target;
+    internal readonly UnityEngine.Transform Target;
     internal readonly EntityId Key;
     internal int Holders;
 
     AmbiTransform _leader;
     int _drivenIndex = AmbiSlot.NONE;
 
-    internal AmbiTransform(Transform target, EntityId key)
+    internal AmbiTransform(UnityEngine.Transform target, EntityId key)
     {
         Target = target;
         Key = key;

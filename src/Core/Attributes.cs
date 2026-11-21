@@ -3,7 +3,7 @@ using System;
 namespace AmbiECS.Glue;
 
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
-public class AmbiGenerated : Attribute { }
+public class AmbiSynchronization : Attribute { }
 
 // Can either be class-wide, or property specific
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Property, AllowMultiple = false)]

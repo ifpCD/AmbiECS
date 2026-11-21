@@ -5,9 +5,9 @@ using AmbiECS.Glue;
 using Unity.Collections;
 using UnityEngine;
 
-namespace AmbiECS.Example;
+namespace AmbiECS.ReferenceDesign;
 
-[AmbiGenerated]
+[AmbiSynchronization]
 internal partial class Foo : AmbiMonoBehaviour<Foo>
 {
     const int ALLOC_SIZE = 10;
@@ -58,13 +58,12 @@ internal partial class Foo : AmbiMonoBehaviour<Foo>
 
     static void OnCapacityIncreased(int newCapacity)
     {
-        ArbitraryScratchBuffer.DisposeExpand(newCapacity * 131);
+        ArbitraryScratchBuffer.Resize(newCapacity * 131);
     }
 }
 
 internal partial class Foo
 {
-    // generate if C# version is 14
     public partial float Volume
     {
         get;
@@ -122,14 +121,14 @@ internal partial class Foo
     // copy all existing buffers into new buffers with double the previous capacity.
     static void IncreaseCapacity(int newCapacity)
     {
-        TargetVolumes.DisposeExpand(newCapacity);
+        TargetVolumes.Resize(newCapacity);
         Array.Resize(ref ConstantFactors, newCapacity);
-        CurrentVolumes.DisposeExpand(newCapacity);
-        BarHandleStrides.DisposeExpand(newCapacity * BAR_HANDLE_SIZE);
+        CurrentVolumes.Resize(newCapacity);
+        BarHandleStrides.Resize(newCapacity * BAR_HANDLE_SIZE);
     }
 }
 
-[AmbiGenerated, SkipAutoDirtyFlagging]
+[AmbiSynchronization, SkipAutoDirtyFlagging]
 internal partial class Bar : AmbiMonoBehaviour<Bar>
 {
     protected override int PreallocatedCapacity => 150;

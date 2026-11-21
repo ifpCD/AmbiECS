@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using AmbiECS.Jobs;
+using AmbiECS.Extensions.Jobs;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -7,7 +7,7 @@ using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 using UnityEngine.Jobs;
 
-namespace AmbiECS;
+namespace AmbiECS.Extensions;
 
 // p3 todo: can't put my finger, but I don't like how the JobHandle pipe is structured here.
 [NoAutoStaticsCleanup]
@@ -19,7 +19,7 @@ public static partial class AmbiTransformHandler
     static JobHandle _resolved;
     static bool _resolvedThisFrame;
 
-    public static AmbiTransform Acquire(Transform transform)
+    public static AmbiTransform Acquire(UnityEngine.Transform transform)
     {
         if (transform == null)
             return null;

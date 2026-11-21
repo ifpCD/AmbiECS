@@ -4,7 +4,7 @@ using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine.Jobs;
 
-namespace AmbiECS.Jobs;
+namespace AmbiECS.Extensions.Jobs;
 
 [BurstCompile]
 internal struct ReadTransformsJob : IJobParallelForTransform

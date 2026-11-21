@@ -26,7 +26,7 @@ public abstract class AmbiBase<T> : IAmbiRegistrant
     internal int SoAIndex => _slot.SoAIndex;
 
     protected abstract int PreallocatedCapacity { get; }
-    protected virtual bool RetainColumnsWhenEmpty => false;
+    protected virtual bool RetainColumnsWhenEmpty => true;
 
     protected abstract void AllocateColumns();
 
