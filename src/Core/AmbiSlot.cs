@@ -13,6 +13,7 @@ public struct AmbiSlot
     internal const int RELOAD = 2; // registered again before its old row was removed: the row starts over
     internal const int QUEUED = 4; // waiting for the next flush
     internal const int DESTROYED = 8; // gone for good: its identity retires when it lands
+    internal const int PENDING = 16; // tracked members changed while the graph ran: the object knows which columns to write
 
     internal int Registered; // place among the registered objects, NONE while unregistered: the one truth behind IsRegistered
     internal int SoAIndex; // row, NONE while it has none

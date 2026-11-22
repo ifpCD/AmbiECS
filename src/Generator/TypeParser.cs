@@ -9,7 +9,6 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace AmbiECS.Generator;
 
-// Symbols to models. Anything the emitter cannot turn into valid code becomes an error, emitted as #error in place of the type.
 static class TypeParser
 {
     public const string AmbiAttribute = "AmbiECS.AmbiAttribute";
@@ -18,6 +17,7 @@ static class TypeParser
     const string StateAttribute = "AmbiECS.StateAttribute";
     const string ScratchAttribute = "AmbiECS.ScratchAttribute";
     const string GlueAttribute = "AmbiECS.GlueAttribute";
+    const string TrackAttribute = "AmbiECS.TrackAttribute";
     const string CleanupAttribute = "Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanupAttribute";
 
     static readonly string[] MessageNames = ["OnEnable", "OnDisable", "OnDestroy", "OnValidate"];
@@ -61,6 +61,7 @@ static class TypeParser
 
         ImmutableArray<ColumnModel>.Builder columns = ImmutableArray.CreateBuilder<ColumnModel>();
         List<(ISymbol Member, string Column)> glued = [];
+        HashSet<string> marked = [];
 
         foreach (ISymbol member in type.GetMembers())
         {
@@ -84,19 +85,90 @@ static class TypeParser
                     && attribute.ConstructorArguments.FirstOrDefault().Value is string column
                 )
                     glued.Add((member, column));
+                else if (name == TrackAttribute)
+                    marked.Add(member.Name);
             }
         }
 
+        CodeIndex code = CodeIndex.Of(type, token);
+
+        Dictionary<string, PartialModel> tracked = new();
+        HashSet<string> partials = [];
+
+        foreach (ISymbol member in type.GetMembers())
+        {
+            if (member is not IPropertySymbol property)
+                continue;
+
+            PartialModel? declaration = property.IsStatic || code.Implemented.Contains(property.Name) ? null : Partial(property, token);
+
+            if (declaration is not { ReadBack: false })
+            {
+                if (marked.Contains(property.Name))
+                    errors.Add($"[Track] on {property.Name} takes a settable partial property, which the generator implements.");
+
+                continue;
+            }
+
+            partials.Add(property.Name);
+
+            if (marked.Contains(property.Name) || glued.Exists(glue => glue.Member.Name == property.Name))
+                tracked[property.Name] = declaration;
+        }
+
         ImmutableArray<GlueModel>.Builder glues = ImmutableArray.CreateBuilder<GlueModel>();
+        List<HashSet<string>> sources = [];
+        int bits = 0;
 
         foreach ((ISymbol member, string column) in glued)
         {
             ColumnModel? target = columns.FirstOrDefault(candidate => candidate.Name == column);
 
             if (target is null)
+            {
                 errors.Add($"[Glue] on {member.Name} names '{column}', which is not an [Input], [State] or [Scratch] column of {type.Name}.");
-            else
-                glues.Add(Glue(member, target, errors, token));
+                continue;
+            }
+
+            bool isTracked = member is IPropertySymbol && tracked.ContainsKey(member.Name);
+            HashSet<string> reads = member is IPropertySymbol && !isTracked ? code.Reads(member.Name, partials) : [];
+
+            foreach (string read in reads.Where(read => !tracked.ContainsKey(read)))
+                errors.Add($"{member.Name} reads {read}, an unimplemented partial property: mark it [Track] to have it tracked.");
+
+            reads.RemoveWhere(read => !tracked.ContainsKey(read));
+            ulong bit = isTracked || reads.Count > 0 ? 1UL << Math.Min(bits++, 63) : 0;
+
+            glues.Add(Glue(member, target, isTracked, bit, code, errors, token));
+            sources.Add(reads);
+        }
+
+        ImmutableArray<PropertyModel>.Builder properties = ImmutableArray.CreateBuilder<PropertyModel>();
+
+        foreach (KeyValuePair<string, PartialModel> property in tracked)
+        {
+            ImmutableArray<int>.Builder writes = ImmutableArray.CreateBuilder<int>();
+            ulong mask = 0;
+
+            for (int i = 0; i < glues.Count; i++)
+            {
+                if (glues[i].Member == property.Key)
+                {
+                    writes.Add(i);
+                    mask |= glues[i].Bit;
+                }
+            }
+
+            for (int i = 0; i < glues.Count; i++)
+            {
+                if (sources[i].Contains(property.Key))
+                {
+                    writes.Add(i);
+                    mask |= glues[i].Bit;
+                }
+            }
+
+            properties.Add(new PropertyModel(property.Key, property.Value, mask, new(writes.ToImmutable())));
         }
 
         foreach (ColumnModel column in columns)
@@ -115,8 +187,10 @@ static class TypeParser
             capacity,
             fixedCapacity,
             retain,
+            code.HasSyncHook,
             new(columns.ToImmutable()),
             new(glues.ToImmutable()),
+            new(properties.ToImmutable()),
             new(isBehaviour ? Messages(type, manual) : ImmutableArray<MessageModel>.Empty),
             new(errors.ToImmutable())
         );
@@ -127,7 +201,6 @@ static class TypeParser
         int stride = 1;
         int perRow = 1;
         int length = 0;
-        bool loadOnly = false;
         TypedConstant? constant = null;
         string? defaultFrom = null;
 
@@ -145,9 +218,6 @@ static class TypeParser
                     break;
                 case "Length" when value is int count:
                     length = count;
-                    break;
-                case "LoadOnly" when value is bool flag:
-                    loadOnly = flag;
                     break;
                 case "Default":
                     constant = argument.Value;
@@ -174,7 +244,7 @@ static class TypeParser
         else if (constant is { IsNull: false } typed && SymbolDisplay.FormatPrimitive(typed.Value!, true, false) is string literal)
             initial = $"({elementName})({literal})";
 
-        return new ColumnModel(field.Name, kind, storage ?? Storage.NativeArray, elementName, stride, perRow, length, loadOnly, initial);
+        return new ColumnModel(field.Name, kind, storage ?? Storage.NativeArray, elementName, stride, perRow, length, initial);
     }
 
     static Storage? StorageOf(ITypeSymbol type, out ITypeSymbol? element)
@@ -199,15 +269,28 @@ static class TypeParser
         return null;
     }
 
-    static GlueModel Glue(ISymbol member, ColumnModel column, ImmutableArray<string>.Builder errors, CancellationToken token)
+    static GlueModel Glue(
+        ISymbol member,
+        ColumnModel column,
+        bool tracked,
+        ulong bit,
+        CodeIndex code,
+        ImmutableArray<string>.Builder errors,
+        CancellationToken token
+    )
     {
         ITypeSymbol type = member is IPropertySymbol property ? property.Type : ((IFieldSymbol)member).Type;
-        PartialModel? partial = member is IPropertySymbol declared ? Partial(declared, token) : null;
-        bool readBack = partial is { ReadBack: true };
+
+        PartialModel? readBack =
+            member is IPropertySymbol declared
+            && !code.Implemented.Contains(member.Name)
+            && Partial(declared, token) is { ReadBack: true } getter
+                ? getter
+                : null;
 
         ITypeSymbol element = type;
-        string source = member.Name;
         bool sequence = false;
+        bool isList = false;
 
         if (type is IArrayTypeSymbol { Rank: 1 } array)
         {
@@ -218,10 +301,10 @@ static class TypeParser
         {
             element = list.TypeArguments[0];
             sequence = true;
-            source = $"global::System.Runtime.InteropServices.CollectionsMarshal.AsSpan({member.Name})";
+            isList = true;
         }
 
-        if (readBack)
+        if (readBack is not null)
         {
             if (column.Stride > 1 || column.Storage == Storage.TransformAccessArray)
                 errors.Add($"{member.Name} reads {column.Name} back, which takes an indexed column without a stride.");
@@ -230,8 +313,20 @@ static class TypeParser
             errors.Add($"{member.Name} feeds {column.Name}, which is not an [Input] column. Glue a get-only partial property to read it back.");
         else if (column.Stride > 1 && !sequence)
             errors.Add($"{member.Name} feeds the strided column {column.Name}, which takes a List<T> or T[].");
+        else if (member is IPropertySymbol { GetMethod: null })
+            errors.Add($"{member.Name} feeds {column.Name} but has no getter to write its row from.");
 
-        return new GlueModel(member.Name, column.Name, sequence, IsAmbi(element), element.ToDisplayString(Qualified), source, partial);
+        return new GlueModel(
+            member.Name,
+            column.Name,
+            sequence,
+            isList,
+            IsAmbi(element),
+            element.ToDisplayString(Qualified),
+            tracked,
+            bit,
+            readBack
+        );
     }
 
     // The defining declaration of a partial property, which the generator implements. Null for anything written by hand.
@@ -298,8 +393,6 @@ static class TypeParser
                 messages.Add(new MessageModel(name, "", false, false));
             else if ((inherited.IsVirtual || inherited.IsAbstract || inherited.IsOverride) && !inherited.IsSealed)
                 messages.Add(new MessageModel(name, AccessibilityOf(inherited, type), true, !inherited.IsAbstract));
-
-            // a non-virtual inherited message can't be extended without hiding it: left to the user
         }
 
         return messages.ToImmutable();
@@ -348,4 +441,95 @@ static class TypeParser
     }
 
     static bool In(ISymbol symbol, string ns) => symbol.ContainingNamespace?.ToDisplayString() == ns;
+
+    sealed class CodeIndex
+    {
+        readonly Dictionary<string, List<SyntaxNode>> _bodies = new();
+
+        public HashSet<string> Implemented { get; } = [];
+
+        public bool HasSyncHook { get; private set; }
+
+        public static CodeIndex Of(INamedTypeSymbol type, CancellationToken token)
+        {
+            CodeIndex code = new();
+
+            foreach (SyntaxReference reference in type.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax(token) is not TypeDeclarationSyntax declaration)
+                    continue;
+
+                foreach (MemberDeclarationSyntax member in declaration.Members)
+                {
+                    if (member is PropertyDeclarationSyntax property)
+                    {
+                        string name = property.Identifier.ValueText;
+                        bool partial = property.Modifiers.Any(SyntaxKind.PartialKeyword);
+
+                        if (property.ExpressionBody is not null)
+                            code.Add(name, property.ExpressionBody, partial);
+
+                        foreach (AccessorDeclarationSyntax accessor in property.AccessorList?.Accessors ?? default)
+                        {
+                            if (((SyntaxNode?)accessor.Body ?? accessor.ExpressionBody) is { } body)
+                                code.Add(name, body, partial);
+                        }
+                    }
+                    else if (member is MethodDeclarationSyntax method)
+                    {
+                        string name = method.Identifier.ValueText;
+                        code.HasSyncHook |= name == "OnRowSynced";
+
+                        if (((SyntaxNode?)method.Body ?? method.ExpressionBody) is { } body)
+                            code.Add(name, body, false);
+                    }
+                }
+            }
+
+            return code;
+        }
+
+        public HashSet<string> Reads(string member, HashSet<string> properties)
+        {
+            HashSet<string> visited = [member];
+            HashSet<string> reads = [];
+            Stack<string> pending = new();
+            pending.Push(member);
+
+            while (pending.Count > 0)
+            {
+                if (!_bodies.TryGetValue(pending.Pop(), out List<SyntaxNode>? bodies))
+                    continue;
+
+                foreach (SyntaxNode body in bodies)
+                {
+                    foreach (IdentifierNameSyntax identifier in body.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>())
+                    {
+                        string name = identifier.Identifier.ValueText;
+
+                        if (properties.Contains(name))
+                            reads.Add(name);
+                        else if (visited.Add(name))
+                            pending.Push(name);
+                    }
+                }
+            }
+
+            return reads;
+        }
+
+        void Add(string name, SyntaxNode body, bool partial)
+        {
+            if (!_bodies.TryGetValue(name, out List<SyntaxNode>? bodies))
+            {
+                bodies = [];
+                _bodies[name] = bodies;
+            }
+
+            bodies.Add(body);
+
+            if (partial)
+                Implemented.Add(name);
+        }
+    }
 }

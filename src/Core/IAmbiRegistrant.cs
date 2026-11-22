@@ -25,9 +25,11 @@ public interface IAmbiRegistrant<TSelf>
 
     static abstract void DeallocateColumns();
 
+    // Writes the whole row: when it is created, followed by SyncRow(row, false).
     void LoadRow(int row);
 
-    void SyncRow(int row);
+    // Writes what changed: what tracked members left pending, and with dirty (MarkDirty), every untracked member too.
+    void SyncRow(int row, bool dirty);
 
     // Called on the departing object, before its slot lets go of the row: lastRow's contents move into row, unless they are the same.
     void RemoveRow(int row, int lastRow);

@@ -22,8 +22,9 @@ public sealed partial class AmbiTransform
 
     internal static int DrivenCount;
 
+    // tracked, and set once: one TransformAccessArray write per row
     [Glue(nameof(Transforms))]
-    internal readonly Transform Target;
+    internal partial Transform Target { get; private init; }
 
     internal readonly EntityId Key;
     internal int Holders;

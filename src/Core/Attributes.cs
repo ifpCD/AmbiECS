@@ -23,14 +23,12 @@ public sealed class AmbiAttribute : Attribute
     public AmbiRegistration Registration { get; set; }
 }
 
-// A column written from the object: on every sync after the object is marked dirty, or when its row is created only (LoadOnly).
+// A column written from the object: when its row is created, then whenever what feeds it changes (see Glue).
 // NativeArray<T>, T[], or TransformAccessArray (appended to and removed from in row order).
 [AttributeUsage(AttributeTargets.Field)]
 public sealed class InputAttribute : Attribute
 {
     public int Stride { get; set; } = 1;
-
-    public bool LoadOnly { get; set; }
 }
 
 // A column owned by jobs: set to Default (a constant) or DefaultFrom (a static member, by nameof) when a row is created, and
@@ -55,10 +53,20 @@ public sealed class ScratchAttribute : Attribute
     public int Length { get; set; }
 }
 
-// Links a member to the column it feeds. A settable partial property gets a setter that marks the object dirty; a get-only
-// partial property reads its row back. A List<T> or T[] fills a strided row, with handles when T is an Ambi type.
+// Links a member to the column it feeds; every column is written in full when its row is created. After that:
+// - tracked: a settable partial property, which the generator implements, so it sees every change. Its column, and those of the
+//   computed members reading it, are written on change: at once while the graph is idle, at the next flush otherwise.
+//   MarkDirty never re-reads it, so a value that is fixed for the row's life costs one write.
+// - untracked: any other member (a field, a computed property, a list changed in place) is re-read after MarkDirty(). A computed
+//   property reading tracked properties is also rewritten when they change, glued or marked [Track].
+// A get-only partial property reads its row back. A List<T> or T[] fills a strided row, with handles when T is an Ambi type.
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public sealed class GlueAttribute(string column) : Attribute
 {
     public string Column { get; } = column;
 }
+
+// Tracks a settable partial property that feeds no column itself, for the computed glue reading it: the generator implements
+// it, and a change rewrites what reads it. Glue tracks a settable partial property without it; any other is left to you.
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class TrackAttribute : Attribute { }

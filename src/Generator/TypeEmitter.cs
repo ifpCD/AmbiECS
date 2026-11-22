@@ -5,7 +5,6 @@ using System.Text;
 
 namespace AmbiECS.Generator;
 
-// Models to source. Everything is fully qualified, so the user's usings never matter.
 static class TypeEmitter
 {
     public static string Emit(TypeModel type)
@@ -51,6 +50,13 @@ static class TypeEmitter
     {
         w.Line("global::AmbiECS.AmbiSlot _ambiSlot = global::AmbiECS.AmbiSlot.Unassigned;");
         w.Line();
+
+        if (type.HasPendingBits)
+        {
+            w.Line("ulong _ambiPending;");
+            w.Line();
+        }
+
         w.Line($"ref global::AmbiECS.AmbiSlot {contract}.Slot => ref _ambiSlot;");
         w.Line();
         w.Line($"public global::AmbiECS.AmbiHandle Handle => {ambi}.HandleOf(this);");
@@ -148,69 +154,76 @@ static class TypeEmitter
     static void Rows(CodeWriter w, TypeModel type, string contract)
     {
         ColumnModel[] columns = [.. type.Columns.Items];
-        List<string> load = [];
-        List<string> sync = [];
+        GlueModel[] writes = [.. type.Glues.Items.Where(glue => glue.ReadBack is null)];
+
+        w.Line();
+        w.Open($"void {contract}.LoadRow(int row)");
 
         foreach (ColumnModel column in columns)
         {
             if (column.Kind != ColumnKind.State)
                 continue;
 
-            load.Add(
+            w.Line(
                 column.Stride == 1
                     ? $"{column.Name}[row] = {column.Initial};"
                     : $"for (int i = row * {column.Stride}, end = i + {column.Stride}; i < end; i++) {column.Name}[i] = {column.Initial};"
             );
         }
 
-        foreach (GlueModel glue in type.Glues.Items)
+        foreach (GlueModel glue in writes)
         {
-            ColumnModel column = columns.First(candidate => candidate.Name == glue.Column);
+            ColumnModel column = ColumnOf(columns, glue);
 
-            if (glue.Partial is { ReadBack: true } || column.Kind != ColumnKind.Input)
-                continue;
-
-            List<string> writes = column.LoadOnly ? load : sync;
-
-            if (glue.Sequence)
-            {
-                string write = glue.Targets ? "WriteHandles" : "WriteValues";
-                writes.Add($"global::AmbiECS.AmbiColumn.{write}<{glue.Element}>({column.Name}, row, {column.Stride}, {glue.Source});");
-                continue;
-            }
-
-            string value = glue.Targets ? $"global::AmbiECS.Ambi<{glue.Element}>.HandleOf({glue.Source})" : glue.Source;
-
-            if (column.Storage == Storage.TransformAccessArray)
-            {
-                load.Add($"{column.Name}.Add({value});");
-
-                if (!column.LoadOnly)
-                    sync.Add($"{column.Name}[row] = {value};");
-            }
-            else
-                writes.Add($"{column.Name}[row] = {value};");
+            w.Line(
+                column.Storage == Storage.TransformAccessArray
+                    ? $"{column.Name}.Add({Value(glue, glue.Member)});"
+                    : Write(glue, column, glue.Member)
+            );
         }
 
-        w.Line();
-        w.Open($"void {contract}.LoadRow(int row)");
-
-        foreach (string line in load)
-            w.Line(line);
+        if (type.HasPendingBits)
+            w.Line("_ambiPending = 0;");
 
         w.Line("OnRowLoaded(row);");
         w.Close();
 
         w.Line();
-        w.Open($"void {contract}.SyncRow(int row)");
+        w.Open($"void {contract}.SyncRow(int row, bool dirty)");
 
-        foreach (string line in sync)
-            w.Line(line);
+        if (type.HasPendingBits)
+        {
+            w.Line("ulong pending = _ambiPending;");
+            w.Line("_ambiPending = 0;");
+            w.Line();
+        }
+
+        GlueModel[] untracked = [.. writes.Where(glue => glue.Bit == 0)];
+
+        if (untracked.Length > 0)
+        {
+            w.Open("if (dirty)");
+
+            foreach (GlueModel glue in untracked)
+                w.Line(Write(glue, ColumnOf(columns, glue), glue.Member));
+
+            w.Close();
+            w.Line();
+        }
+
+        foreach (GlueModel glue in writes)
+        {
+            if (glue.Bit == 0)
+                continue;
+
+            string bit = $"(pending & 0x{glue.Bit:X}UL) != 0";
+            w.Line(glue.Tracked ? $"if ({bit})" : $"if (dirty || {bit})");
+            w.Line("    " + Write(glue, ColumnOf(columns, glue), glue.Member));
+        }
 
         w.Line("OnRowSynced(row);");
         w.Close();
 
-        // scratch never moves; appended columns remove their row whether or not it is the last
         ColumnModel[] carried = [.. columns.Where(column => column.Kind != ColumnKind.Scratch)];
         ColumnModel[] appended = [.. carried.Where(column => column.Storage == Storage.TransformAccessArray)];
         ColumnModel[] indexed = [.. carried.Where(column => column.Storage != Storage.TransformAccessArray)];
@@ -243,37 +256,73 @@ static class TypeEmitter
 
     static void Properties(CodeWriter w, TypeModel type, string ambi)
     {
-        foreach (GlueModel glue in type.Glues.Items)
+        ColumnModel[] columns = [.. type.Columns.Items];
+        GlueModel[] glues = [.. type.Glues.Items];
+
+        foreach (PropertyModel property in type.Properties.Items)
         {
-            if (glue.Partial is not PartialModel property)
+            PartialModel declaration = property.Declaration;
+
+            w.Line();
+            w.Open($"{declaration.Modifiers} {declaration.Type} {property.Name}");
+
+            if (declaration.HasGetter)
+                w.Line($"{declaration.GetModifiers}get;");
+
+            w.Open($"{declaration.SetModifiers}{declaration.SetKeyword}");
+            w.Line($"if (global::System.Collections.Generic.EqualityComparer<{declaration.Type}>.Default.Equals(field, value))");
+            w.Line("    return;");
+            w.Line();
+            w.Line("field = value;");
+
+            if (property.Writes.Items.Length > 0)
+            {
+                string pend = $"_ambiPending |= 0x{property.Mask:X}UL;";
+                string queue = $"{ambi}.MarkPending(this);";
+
+                w.Line();
+
+                if (type.HasSyncHook)
+                {
+                    w.Line(pend);
+                    w.Line(queue);
+                }
+                else
+                {
+                    w.Line("int row = _ambiSlot.Row;");
+                    w.Line();
+                    w.Open("if (row >= 0 && global::AmbiECS.AmbiScheduler.IsIdle)");
+
+                    foreach (int index in property.Writes.Items)
+                    {
+                        GlueModel glue = glues[index];
+                        w.Line(Write(glue, ColumnOf(columns, glue), glue.Member == property.Name ? "value" : glue.Member));
+                    }
+
+                    w.Close();
+                    w.Open("else");
+                    w.Line(pend);
+                    w.Line(queue);
+                    w.Close();
+                }
+            }
+
+            w.Close();
+            w.Close();
+        }
+
+        foreach (GlueModel glue in glues)
+        {
+            if (glue.ReadBack is not PartialModel declaration)
                 continue;
 
             w.Line();
-            w.Open($"{property.Modifiers} {property.Type} {glue.Member}");
-
-            if (property.ReadBack)
-            {
-                // free while the graph is idle, as it is during Update; a sync point anywhere else
-                w.Open($"{property.GetModifiers}get");
-                w.Line("global::AmbiECS.AmbiScheduler.Complete();");
-                w.Line("int row = _ambiSlot.Row;");
-                w.Line($"return row < 0 ? default : {glue.Column}[row];");
-                w.Close();
-            }
-            else
-            {
-                if (property.HasGetter)
-                    w.Line($"{property.GetModifiers}get;");
-
-                w.Open($"{property.SetModifiers}{property.SetKeyword}");
-                w.Line($"if (global::System.Collections.Generic.EqualityComparer<{property.Type}>.Default.Equals(field, value))");
-                w.Line("    return;");
-                w.Line();
-                w.Line("field = value;");
-                w.Line($"{ambi}.MarkDirty(this);");
-                w.Close();
-            }
-
+            w.Open($"{declaration.Modifiers} {declaration.Type} {glue.Member}");
+            w.Open($"{declaration.GetModifiers}get");
+            w.Line("global::AmbiECS.AmbiScheduler.Complete();");
+            w.Line("int row = _ambiSlot.Row;");
+            w.Line($"return row < 0 ? default : {glue.Column}[row];");
+            w.Close();
             w.Close();
         }
     }
@@ -282,31 +331,36 @@ static class TypeEmitter
     {
         foreach (MessageModel message in type.Messages.Items)
         {
-            string call = message.Name switch
+            List<string> body = message.Name switch
             {
-                "OnEnable" => "Register",
-                "OnDisable" => "Deregister",
-                "OnDestroy" => "Destroy",
-                _ => "MarkDirty", // OnValidate: inspector, undo and animation edits skip the setters
+                "OnEnable" => [$"{ambi}.Register(this);"],
+                "OnDisable" => [$"{ambi}.Deregister(this);"],
+                "OnDestroy" => [$"{ambi}.Destroy(this);"],
+                _ => [$"{ambi}.MarkDirty(this);"], // OnValidate: inspector, undo and animation edits skip the setters
             };
 
             bool editorOnly = message.Name == "OnValidate";
+
+            if (editorOnly && type.HasPendingBits)
+                body.Insert(0, "_ambiPending = ulong.MaxValue;");
 
             w.Line();
 
             if (editorOnly)
                 w.Directive("#if UNITY_EDITOR");
 
-            if (!message.Override)
-                w.Line($"void {message.Name}() => {ambi}.{call}(this);");
+            if (!message.Override && body.Count == 1)
+                w.Line($"void {message.Name}() => {body[0].TrimEnd(';')};");
             else
             {
-                w.Open($"{message.Accessibility} override void {message.Name}()");
+                w.Open(message.Override ? $"{message.Accessibility} override void {message.Name}()" : $"void {message.Name}()");
 
                 if (message.CallBase)
                     w.Line($"base.{message.Name}();");
 
-                w.Line($"{ambi}.{call}(this);");
+                foreach (string line in body)
+                    w.Line(line);
+
                 w.Close();
             }
 
@@ -331,6 +385,20 @@ static class TypeEmitter
         w.Line();
         w.Line("partial void OnRowRemoved(int row, int lastRow);");
     }
+
+    static ColumnModel ColumnOf(ColumnModel[] columns, GlueModel glue) => columns.First(column => column.Name == glue.Column);
+
+    static string Write(GlueModel glue, ColumnModel column, string member)
+    {
+        if (!glue.Sequence)
+            return $"{column.Name}[row] = {Value(glue, member)};";
+
+        string write = glue.Targets ? "WriteHandles" : "WriteValues";
+        string span = glue.IsList ? $"global::System.Runtime.InteropServices.CollectionsMarshal.AsSpan({member})" : member;
+        return $"global::AmbiECS.AmbiColumn.{write}<{glue.Element}>({column.Name}, row, {column.Stride}, {span});";
+    }
+
+    static string Value(GlueModel glue, string member) => glue.Targets ? $"global::AmbiECS.Ambi<{glue.Element}>.HandleOf({member})" : member;
 
     static string Length(ColumnModel column)
     {

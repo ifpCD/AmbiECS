@@ -55,7 +55,8 @@ public static partial class AmbiScheduler
 
     internal static bool Defers => _deferring;
 
-    internal static bool IsIdle => !_busy;
+    // No job runs and no row moves: from EarlyUpdate to the end of Update, and after Complete(). Columns are free to write.
+    public static bool IsIdle => !_busy;
 
     // Systems schedule in the order they subscribed.
     public static void Subscribe(IAmbiSystem system)

@@ -7,7 +7,7 @@ namespace AmbiECS.Extensions;
 
 public sealed partial class AmbiTransform
 {
-    [Input(LoadOnly = true)]
+    [Input]
     internal static TransformAccessArray Transforms;
 
     [Input]

@@ -10,15 +10,16 @@ namespace AmbiECS;
 // Registered: the objects registered right now, for main-thread code. Requests change it at once, so it never holds an object
 // that has left or been destroyed.
 // Rows: the objects the graph reads, packed in [0, RowCount), removed by swap-back. Each request queues its object once, and
-// rows change only when AmbiScheduler flushes the queues. LoadRow fills a new row and SyncRow rewrites a row from its object;
-// both run at the flush, write that row and nothing else, and issue no requests.
+// rows change only when AmbiScheduler flushes the queues. LoadRow fills a new row, and SyncRow rewrites what changed in it: what
+// tracked members left pending, plus every untracked member once marked dirty. Both run at the flush, write that row and nothing
+// else, and issue no requests.
 //
-// Capacity is where a type starts. The managed views grow at once; the columns, and the native mirrors of the identity table,
+// Capacity is where a type starts. The managed views grow at once; the columns, and the native mirror of the identity table,
 // grow only while the graph is idle, so growing never waits on a job. Types that can't grow throw at their caller instead.
 // Columns are freed when a flush leaves a type empty, unless the type retains them.
 //
 // Identities: an AmbiHandle names an object from the first read of its Handle until it is destroyed, whatever its registration
-// in between. HandleToSoA[identity] is its row or -1, and HandleVersions retires the handle on destruction. Versions start at 1
+// in between. Its lookup entry holds its row or -1, and the version that retires the handle on destruction. Versions start at 1
 // (0 is Null) and outlive their slot, so a recycled slot never reissues a handle someone still holds. The identity table lives
 // until code unload.
 //
@@ -35,9 +36,8 @@ public static class Ambi<T>
     static int _rowCount;
     static int _capacity; // of the rows and columns, kept while they are deallocated so they come back at the same size
 
-    static NativeArray<int> _handleToSoA;
-    static NativeArray<int> _handleVersions;
-    static int[] _versions = []; // authoritative: the native mirrors catch up while the graph is idle
+    static NativeArray<AmbiLookup.Entry> _identities;
+    static int[] _versions = []; // authoritative: the native mirror catches up while the graph is idle
     static int[] _freeIdentities = [];
     static int _freeIdentityCount;
     static int _nextIdentity;
@@ -53,7 +53,7 @@ public static class Ambi<T>
 
     public static bool IsEmpty => _rowCount == 0;
 
-    public static AmbiLookup Lookup => new() { HandleToSoA = _handleToSoA, HandleVersions = _handleVersions };
+    public static AmbiLookup Lookup => new() { Entries = _identities };
 
     // the objects registered right now; any request is safe while walking them
     public static Registrations Registered => default;
@@ -97,6 +97,19 @@ public static class Ambi<T>
             return;
 
         slot.Flags |= AmbiSlot.DIRTY;
+        Settle(instance, ref slot);
+    }
+
+    // A tracked member changed while the graph ran: the object holds which columns are pending, the flush writes them.
+    // An object without a row has nothing pending: creating its row writes it whole.
+    public static void MarkPending(T instance)
+    {
+        ref AmbiSlot slot = ref instance.Slot;
+
+        if (slot.Registered < 0 || slot.SoAIndex < 0)
+            return;
+
+        slot.Flags |= AmbiSlot.PENDING;
         Settle(instance, ref slot);
     }
 
@@ -163,11 +176,8 @@ public static class Ambi<T>
         if (_rows != null)
             DeallocateRows();
 
-        if (_handleToSoA.IsCreated)
-        {
-            _handleToSoA.Dispose();
-            _handleVersions.Dispose();
-        }
+        if (_identities.IsCreated)
+            _identities.Dispose();
     }
 
     // Out of Registered at once, by swap-back.
@@ -258,21 +268,22 @@ public static class Ambi<T>
         {
             if (slot.SoAIndex < 0)
                 AddRow(instance, ref slot);
-            else if ((slot.Flags & AmbiSlot.DIRTY) != 0)
-                instance.SyncRow(slot.SoAIndex);
+            else if ((slot.Flags & (AmbiSlot.DIRTY | AmbiSlot.PENDING)) != 0)
+                instance.SyncRow(slot.SoAIndex, (slot.Flags & AmbiSlot.DIRTY) != 0);
         }
 
-        slot.Flags &= ~(AmbiSlot.DIRTY | AmbiSlot.RELOAD);
+        slot.Flags &= ~(AmbiSlot.DIRTY | AmbiSlot.PENDING | AmbiSlot.RELOAD);
 
         if (slot.Identity >= 0)
-            _handleToSoA[slot.Identity] = slot.SoAIndex;
+            MapIdentity(slot.Identity, slot.SoAIndex);
 
         if ((slot.Flags & AmbiSlot.DESTROYED) != 0)
             RetireIdentity(ref slot);
     }
 
     // Its row goes when it is no longer registered, or registered again after leaving, so that the row starts over.
-    static bool Leaves(ref AmbiSlot slot) => slot.Registered < 0 || (slot.Flags & AmbiSlot.RELOAD) != 0;
+    static bool Leaves(ref AmbiSlot slot) =>
+        slot.Registered < 0 || (slot.Flags & AmbiSlot.RELOAD) != 0;
 
     static void AddRow(T instance, ref AmbiSlot slot)
     {
@@ -286,7 +297,7 @@ public static class Ambi<T>
         _rows[row] = instance;
 
         instance.LoadRow(row);
-        instance.SyncRow(row);
+        instance.SyncRow(row, false);
     }
 
     static void RemoveRow(T instance, ref AmbiSlot slot)
@@ -302,7 +313,7 @@ public static class Ambi<T>
             movedSlot.SoAIndex = row;
 
             if (movedSlot.Identity >= 0)
-                _handleToSoA[movedSlot.Identity] = row;
+                MapIdentity(movedSlot.Identity, row);
         }
 
         instance.RemoveRow(row, lastRow);
@@ -369,13 +380,12 @@ public static class Ambi<T>
         if (AmbiScheduler.IsIdle)
         {
             MirrorIdentities();
-            _handleToSoA[slot.Identity] = slot.SoAIndex;
+            MapIdentity(slot.Identity, slot.SoAIndex);
         }
         else
             Settle(instance, ref slot);
     }
 
-    // Native mirrors are written while the graph is idle only, and are up to date then.
     static void RetireIdentity(ref AmbiSlot slot)
     {
         int identity = slot.Identity;
@@ -388,12 +398,15 @@ public static class Ambi<T>
         int version = _versions[identity] + 1;
         _versions[identity] = version == 0 ? 1 : version; // 0 is Null
 
-        _handleVersions[identity] = _versions[identity];
-        _handleToSoA[identity] = AmbiSlot.NONE;
+        MapIdentity(identity, AmbiSlot.NONE);
         _freeIdentities[_freeIdentityCount++] = identity;
     }
 
-    // Managed only, so at any time: the native mirrors follow at the next idle point.
+    // The native mirror is written while the graph is idle only, and is up to date then.
+    static void MapIdentity(int identity, int row) =>
+        _identities[identity] = new AmbiLookup.Entry { Row = row, Version = _versions[identity] };
+
+    // Managed only, so at any time: the native mirror follows at the next idle point.
     static void ReserveIdentities(int capacity)
     {
         int length = _versions.Length;
@@ -406,22 +419,19 @@ public static class Ambi<T>
         Array.Fill(_versions, 1, length, capacity - length); // versions start at 1: 0 is Null
     }
 
-    // Brings the native mirrors up to every identity reserved. Only while the graph is idle.
+    // Brings the native mirror up to every identity reserved. Only while the graph is idle.
     static void MirrorIdentities()
     {
         int length = _versions.Length;
-        int mirrored = _handleToSoA.IsCreated ? _handleToSoA.Length : 0;
+        int mirrored = _identities.IsCreated ? _identities.Length : 0;
 
         if (mirrored >= length)
             return;
 
-        _handleToSoA.Resize(length);
-        _handleVersions.Resize(length);
+        _identities.Resize(length);
 
         for (int i = mirrored; i < length; i++)
-            _handleToSoA[i] = AmbiSlot.NONE;
-
-        NativeArray<int>.Copy(_versions, mirrored, _handleVersions, mirrored, length - mirrored);
+            MapIdentity(i, AmbiSlot.NONE);
     }
 
     // Mutation-tolerant, swap-back-aware walk over the registered objects, for main-thread code such as culling in

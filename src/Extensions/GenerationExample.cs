@@ -5,13 +5,16 @@ using UnityEngine;
 namespace AmbiECS.ReferenceDesign;
 
 // The annotation pattern. Columns are static storage you declare; glue links an object's members to them; the generator writes
-// the rest: allocation, growth, swap-back, load and sync, dirty-tracking setters, read-back, and the Unity messages.
+// the rest: allocation, growth, swap-back, row writes, setters, read-back, and the Unity messages.
 //
-// [Input]    written from the object: on every sync after it is marked dirty, or only when its row is created (LoadOnly)
+// [Input]    written from the object: when its row is created, then whenever what feeds it changes
 // [State]    owned by jobs: set to its default when a row is created, and carried along with its row
 // [Scratch]  owned by jobs, not tied to rows: PerRow elements per row of capacity (following growth) or a fixed Length
 //
-// A settable partial property gets a setter that marks the object dirty; a plain member needs MarkDirty() after a change.
+// Tracked: a glued settable partial property, or one marked [Track] for the computed glue reading it. Its column, and those of the
+// computed members reading it, are written on change: at once while the graph is idle (all of Update), at the next flush
+// otherwise. MarkDirty() never re-reads it.
+// Untracked: any other member, re-read after MarkDirty(). A computed one is also rewritten when the tracked properties it reads change.
 // A get-only partial property reads its row back. Anything not annotated is yours, kept in the optional partial hooks:
 // OnColumnsAllocated, OnColumnsResized, OnColumnsDeallocating, OnRowLoaded, OnRowSynced and OnRowRemoved.
 [Ambi(Capacity = 10)]
@@ -22,7 +25,7 @@ internal partial class Foo : MonoBehaviour
     [Input]
     public static NativeArray<float> TargetVolumes;
 
-    [Input(LoadOnly = true)]
+    [Input]
     public static float[] ConstantFactors;
 
     [Input(Stride = BAR_STRIDE)]
@@ -34,15 +37,21 @@ internal partial class Foo : MonoBehaviour
     [Scratch(PerRow = 131)]
     public static NativeArray<int> ArbitraryScratch;
 
+    // tracked by [Track]: no column of its own, but TargetVolume reads it
+    [Track]
     [field: SerializeField]
-    [Glue(nameof(TargetVolumes))]
     public partial float Volume { get; set; } = 1f;
 
+    // computed: rewritten whenever Volume changes
+    [Glue(nameof(TargetVolumes))]
+    float TargetVolume => Mathf.Clamp01(Volume);
+
+    // tracked: one write per row, unless it changes
     [field: SerializeField]
     [Glue(nameof(ConstantFactors))]
-    public float ConstantFactor { get; set; } = 3.8f;
+    public partial float ConstantFactor { get; set; } = 3.8f;
 
-    // handles of up to BAR_STRIDE bars, front-packed
+    // untracked: MarkDirty() after changing the list. Handles of up to BAR_STRIDE bars, front-packed
     [Glue(nameof(BarHandles))]
     public List<Bar> Bars = [];
 
