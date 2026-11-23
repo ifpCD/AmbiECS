@@ -31,6 +31,7 @@ sealed record TypeModel(
     EquatableArray<ColumnModel> Columns,
     EquatableArray<GlueModel> Glues,
     EquatableArray<PropertyModel> Properties,
+    EquatableArray<ReadbackModel> Readbacks,
     EquatableArray<MessageModel> Messages,
     EquatableArray<string> Errors
 )
@@ -68,7 +69,6 @@ sealed record ColumnModel(
 // Sequence: a List<T> or T[] filling a strided row (IsList: the former). Targets: its element is an Ambi type, written as handles.
 // Element: the element type (the member's own type when not a sequence). Tracked: the member is a tracked property, never
 // re-read on MarkDirty. Bit: its pending bit, for tracked glue and for computed glue reading tracked properties; 0 for none.
-// ReadBack: a get-only partial property reading the row back, which writes nothing.
 sealed record GlueModel(
     string Member,
     string Column,
@@ -77,18 +77,20 @@ sealed record GlueModel(
     bool Targets,
     string Element,
     bool Tracked,
-    ulong Bit,
-    PartialModel? ReadBack
+    ulong Bit
 );
 
 // A tracked property: a settable partial property the generator implements. Writes: the glue it rewrites on change, its own
 // first, then the computed glue reading it. Mask: their pending bits.
 sealed record PropertyModel(string Name, PartialModel Declaration, ulong Mask, EquatableArray<int> Writes);
 
-// A partial property's defining declaration, repeated by the implementing one. No setter: it reads its row back.
+// A get-only partial property reading its row of Column back. After: the JobHandle member to complete first, instead of the graph.
+sealed record ReadbackModel(string Member, string Column, string? After, PartialModel Declaration);
+
+// A partial property's defining declaration, repeated by the implementing one.
 sealed record PartialModel(string Modifiers, string Type, bool HasGetter, string GetModifiers, string SetKeyword, string SetModifiers)
 {
-    public bool ReadBack => SetKeyword.Length == 0;
+    public bool Settable => SetKeyword.Length > 0;
 }
 
 // Override: the message is virtual in a base class of the user's, so it is extended rather than declared.

@@ -154,7 +154,7 @@ static class TypeEmitter
     static void Rows(CodeWriter w, TypeModel type, string contract)
     {
         ColumnModel[] columns = [.. type.Columns.Items];
-        GlueModel[] writes = [.. type.Glues.Items.Where(glue => glue.ReadBack is null)];
+        GlueModel[] writes = [.. type.Glues.Items];
 
         w.Line();
         w.Open($"void {contract}.LoadRow(int row)");
@@ -311,17 +311,16 @@ static class TypeEmitter
             w.Close();
         }
 
-        foreach (GlueModel glue in glues)
+        foreach (ReadbackModel readback in type.Readbacks.Items)
         {
-            if (glue.ReadBack is not PartialModel declaration)
-                continue;
+            PartialModel declaration = readback.Declaration;
 
             w.Line();
-            w.Open($"{declaration.Modifiers} {declaration.Type} {glue.Member}");
+            w.Open($"{declaration.Modifiers} {declaration.Type} {readback.Member}");
             w.Open($"{declaration.GetModifiers}get");
-            w.Line("global::AmbiECS.AmbiScheduler.Complete();");
+            w.Line(readback.After is null ? "global::AmbiECS.AmbiScheduler.Complete();" : $"{readback.After}.Complete();");
             w.Line("int row = _ambiSlot.Row;");
-            w.Line($"return row < 0 ? default : {glue.Column}[row];");
+            w.Line($"return row < 0 ? default : {readback.Column}[row];");
             w.Close();
             w.Close();
         }

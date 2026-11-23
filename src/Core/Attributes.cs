@@ -59,7 +59,7 @@ public sealed class ScratchAttribute : Attribute
 //   MarkDirty never re-reads it, so a value that is fixed for the row's life costs one write.
 // - untracked: any other member (a field, a computed property, a list changed in place) is re-read after MarkDirty(). A computed
 //   property reading tracked properties is also rewritten when they change, glued or marked [Track].
-// A get-only partial property reads its row back. A List<T> or T[] fills a strided row, with handles when T is an Ambi type.
+// A List<T> or T[] fills a strided row, with handles when T is an Ambi type.
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public sealed class GlueAttribute(string column) : Attribute
 {
@@ -70,3 +70,13 @@ public sealed class GlueAttribute(string column) : Attribute
 // it, and a change rewrites what reads it. Glue tracks a settable partial property without it; any other is left to you.
 [AttributeUsage(AttributeTargets.Property)]
 public sealed class TrackAttribute : Attribute { }
+
+// Reads a get-only partial property back from its row of a column, completing the job graph first.
+// After names a JobHandle member to complete instead: a promise that the column is safe to read once that handle completes.
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class ReadbackAttribute(string column) : Attribute
+{
+    public string Column { get; } = column;
+
+    public string After { get; set; }
+}

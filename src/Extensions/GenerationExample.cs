@@ -15,7 +15,8 @@ namespace AmbiECS.ReferenceDesign;
 // computed members reading it, are written on change: at once while the graph is idle (all of Update), at the next flush
 // otherwise. MarkDirty() never re-reads it.
 // Untracked: any other member, re-read after MarkDirty(). A computed one is also rewritten when the tracked properties it reads change.
-// A get-only partial property reads its row back. Anything not annotated is yours, kept in the optional partial hooks:
+// [Readback] reads a get-only partial property back from its row, after completing the graph, or only the JobHandle named by
+// After. Anything not annotated is yours, kept in the optional partial hooks:
 // OnColumnsAllocated, OnColumnsResized, OnColumnsDeallocating, OnRowLoaded, OnRowSynced and OnRowRemoved.
 [Ambi(Capacity = 10)]
 internal partial class Foo : MonoBehaviour
@@ -37,25 +38,21 @@ internal partial class Foo : MonoBehaviour
     [Scratch(PerRow = 131)]
     public static NativeArray<int> ArbitraryScratch;
 
-    // tracked by [Track]: no column of its own, but TargetVolume reads it
     [Track]
     [field: SerializeField]
     public partial float Volume { get; set; } = 1f;
 
-    // computed: rewritten whenever Volume changes
     [Glue(nameof(TargetVolumes))]
     float TargetVolume => Mathf.Clamp01(Volume);
 
-    // tracked: one write per row, unless it changes
     [field: SerializeField]
     [Glue(nameof(ConstantFactors))]
     public partial float ConstantFactor { get; set; } = 3.8f;
 
-    // untracked: MarkDirty() after changing the list. Handles of up to BAR_STRIDE bars, front-packed
     [Glue(nameof(BarHandles))]
     public List<Bar> Bars = [];
 
-    [Glue(nameof(CurrentVolumes))]
+    [Readback(nameof(CurrentVolumes))]
     public partial float CurrentVolume { get; }
 }
 

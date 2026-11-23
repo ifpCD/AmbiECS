@@ -18,6 +18,7 @@ static class TypeParser
     const string ScratchAttribute = "AmbiECS.ScratchAttribute";
     const string GlueAttribute = "AmbiECS.GlueAttribute";
     const string TrackAttribute = "AmbiECS.TrackAttribute";
+    const string ReadbackAttribute = "AmbiECS.ReadbackAttribute";
     const string CleanupAttribute = "Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanupAttribute";
 
     static readonly string[] MessageNames = ["OnEnable", "OnDisable", "OnDestroy", "OnValidate"];
@@ -62,6 +63,7 @@ static class TypeParser
         ImmutableArray<ColumnModel>.Builder columns = ImmutableArray.CreateBuilder<ColumnModel>();
         List<(ISymbol Member, string Column)> glued = [];
         HashSet<string> marked = [];
+        ImmutableArray<ReadbackModel>.Builder readbacks = ImmutableArray.CreateBuilder<ReadbackModel>();
 
         foreach (ISymbol member in type.GetMembers())
         {
@@ -87,6 +89,16 @@ static class TypeParser
                     glued.Add((member, column));
                 else if (name == TrackAttribute)
                     marked.Add(member.Name);
+                else if (
+                    name == ReadbackAttribute
+                    && member is IPropertySymbol property
+                    && attribute.ConstructorArguments.FirstOrDefault().Value is string source
+                    && Partial(property, token) is PartialModel declaration
+                )
+                {
+                    string? after = attribute.NamedArguments.FirstOrDefault(argument => argument.Key == "After").Value.Value as string;
+                    readbacks.Add(new ReadbackModel(member.Name, source, after, declaration));
+                }
             }
         }
 
@@ -102,7 +114,7 @@ static class TypeParser
 
             PartialModel? declaration = property.IsStatic || code.Implemented.Contains(property.Name) ? null : Partial(property, token);
 
-            if (declaration is not { ReadBack: false })
+            if (declaration is not { Settable: true })
             {
                 if (marked.Contains(property.Name))
                     errors.Add($"[Track] on {property.Name} takes a settable partial property, which the generator implements.");
@@ -139,7 +151,7 @@ static class TypeParser
             reads.RemoveWhere(read => !tracked.ContainsKey(read));
             ulong bit = isTracked || reads.Count > 0 ? 1UL << Math.Min(bits++, 63) : 0;
 
-            glues.Add(Glue(member, target, isTracked, bit, code, errors, token));
+            glues.Add(Glue(member, target, isTracked, bit, errors));
             sources.Add(reads);
         }
 
@@ -191,6 +203,7 @@ static class TypeParser
             new(columns.ToImmutable()),
             new(glues.ToImmutable()),
             new(properties.ToImmutable()),
+            new(readbacks.ToImmutable()),
             new(isBehaviour ? Messages(type, manual) : ImmutableArray<MessageModel>.Empty),
             new(errors.ToImmutable())
         );
@@ -274,19 +287,10 @@ static class TypeParser
         ColumnModel column,
         bool tracked,
         ulong bit,
-        CodeIndex code,
-        ImmutableArray<string>.Builder errors,
-        CancellationToken token
+        ImmutableArray<string>.Builder errors
     )
     {
         ITypeSymbol type = member is IPropertySymbol property ? property.Type : ((IFieldSymbol)member).Type;
-
-        PartialModel? readBack =
-            member is IPropertySymbol declared
-            && !code.Implemented.Contains(member.Name)
-            && Partial(declared, token) is { ReadBack: true } getter
-                ? getter
-                : null;
 
         ITypeSymbol element = type;
         bool sequence = false;
@@ -304,13 +308,8 @@ static class TypeParser
             isList = true;
         }
 
-        if (readBack is not null)
-        {
-            if (column.Stride > 1 || column.Storage == Storage.TransformAccessArray)
-                errors.Add($"{member.Name} reads {column.Name} back, which takes an indexed column without a stride.");
-        }
-        else if (column.Kind != ColumnKind.Input)
-            errors.Add($"{member.Name} feeds {column.Name}, which is not an [Input] column. Glue a get-only partial property to read it back.");
+        if (column.Kind != ColumnKind.Input)
+            errors.Add($"{member.Name} feeds {column.Name}, which is not an [Input] column.");
         else if (column.Stride > 1 && !sequence)
             errors.Add($"{member.Name} feeds the strided column {column.Name}, which takes a List<T> or T[].");
         else if (member is IPropertySymbol { GetMethod: null })
@@ -324,8 +323,7 @@ static class TypeParser
             IsAmbi(element),
             element.ToDisplayString(Qualified),
             tracked,
-            bit,
-            readBack
+            bit
         );
     }
 
