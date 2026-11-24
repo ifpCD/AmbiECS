@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using AmbiECS.Extensions.Jobs;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -6,16 +7,20 @@ using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
 using UnityEngine.Jobs;
 
+namespace AmbiECS.Extensions;
+
 // p3 todo: can't put my finger, but I don't like how the JobHandle pipe is structured here.
 [NoAutoStaticsCleanup]
 public static partial class AmbiTransformHandler
 {
-    static readonly Dictionary<EntityId, AmbiTransform> _byTransform = new(HC.MAX_AMBI_TRANSFORMS);
+    static readonly Dictionary<EntityId, AmbiTransform> _byTransform = new(
+        AmbiTransform.CACHE_BUDGET
+    );
     static readonly Scheduling _scheduling = new();
 
     static JobHandle _resolved;
     static bool _resolvedThisFrame;
-//
+
     public static AmbiTransform Acquire(Transform transform)
     {
         if (transform == null)
@@ -25,7 +30,7 @@ public static partial class AmbiTransformHandler
 
         if (!_byTransform.TryGetValue(key, out AmbiTransform row))
         {
-            if (AmbiTransform.RegisteredCount == HC.MAX_AMBI_TRANSFORMS)
+            if (AmbiTransform.RegisteredCount == AmbiTransform.CACHE_BUDGET)
                 EvictUnheld();
 
             row = new AmbiTransform(transform, key);

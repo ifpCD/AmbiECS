@@ -1,5 +1,6 @@
-using Unity.Scripting.LifecycleManagement;
 using UnityEngine;
+
+namespace AmbiECS.Extensions;
 
 // instead of doing TransformAccessArray on each instance of an arbitrary Ambi component
 // we instead have a reference counted shared transform access class called AmbiTransform
@@ -14,17 +15,21 @@ using UnityEngine;
 // instead of doing so on the main thread - they instead pass a transform reference they want their AmbiTransform to track, and it does so in the job graph
 //
 // the ultimate goal is to both reduce as much main thread interop for transform operations, and also have as little TransformAccessArray additions/removals as they cost quite a bit too.
-[NoAutoStaticsCleanup]
-public sealed partial class AmbiTransform : AmbiBase<AmbiTransform>
+[Ambi(Capacity = CACHE_BUDGET)]
+public sealed partial class AmbiTransform
 {
+    internal const int CACHE_BUDGET = 16384;
+
     internal static int DrivenCount;
 
-    internal readonly Transform Target;
+    // tracked, and set once: one TransformAccessArray write per row
+    [Glue(nameof(Transforms))]
+    internal partial Transform Target { get; private init; }
+
     internal readonly EntityId Key;
     internal int Holders;
 
-    AmbiTransform _leader;
-    int _drivenIndex = AmbiSlot.NONE;
+    int _drivenIndex = -1;
 
     internal AmbiTransform(Transform target, EntityId key)
     {
@@ -32,17 +37,19 @@ public sealed partial class AmbiTransform : AmbiBase<AmbiTransform>
         Key = key;
     }
 
-    public AmbiTransform Leader
-    {
-        get => _leader;
-        set
-        {
-            if (_leader == value)
-                return;
+    [Glue(nameof(Leaders))]
+    public partial AmbiTransform Leader { get; set; }
 
-            _leader = value;
-            MarkDirty();
-        }
+    partial void OnRowSynced(int row)
+    {
+        if (Leader != null && _drivenIndex < 0)
+            Drive();
+    }
+
+    partial void OnRowRemoved(int row, int lastRow)
+    {
+        if (_drivenIndex >= 0)
+            Undrive();
     }
 
     void Drive()
@@ -64,6 +71,6 @@ public sealed partial class AmbiTransform : AmbiBase<AmbiTransform>
         _driven[DrivenCount] = null;
         DrivenTransforms.RemoveAtSwapBack(index);
 
-        _drivenIndex = AmbiSlot.NONE;
+        _drivenIndex = -1;
     }
 }

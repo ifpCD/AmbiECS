@@ -1,5 +1,7 @@
 using System;
 
+namespace AmbiECS;
+
 // Generational name of one Ambi object, valid from the first read of its Handle until it is destroyed, whether or not it is
 // registered in between. Plain data: safe to store in NativeArrays and to resolve in Burst jobs through AmbiLookup.
 //
