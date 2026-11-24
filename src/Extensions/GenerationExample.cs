@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Unity.Collections;
+using Unity.Jobs;
 using UnityEngine;
 
 namespace AmbiECS.ReferenceDesign;
@@ -23,6 +24,8 @@ internal partial class Foo : MonoBehaviour
 {
     const int BAR_STRIDE = 15;
 
+    public static JobHandle PromisedCompletionHandle;
+
     [Input]
     public static NativeArray<float> TargetVolumes;
 
@@ -32,16 +35,19 @@ internal partial class Foo : MonoBehaviour
     [Input(Stride = BAR_STRIDE)]
     public static NativeArray<AmbiHandle> BarHandles;
 
+    // Does not have an OOP input, but instance swap backs preserve the information between frames.
     [State(Default = 1f)]
     public static NativeArray<float> CurrentVolumes;
 
-    [Scratch(PerRow = 131)]
+    // Manually managed via optional callbacks
+    [Scratch(Length = 2048)]
     public static NativeArray<int> ArbitraryScratch;
 
     [Track]
     [field: SerializeField]
     public partial float Volume { get; set; } = 1f;
 
+    // If Volume changes, this recomputes and updates TargetVolumes
     [Glue(nameof(TargetVolumes))]
     float TargetVolume => Mathf.Clamp01(Volume);
 
@@ -49,11 +55,25 @@ internal partial class Foo : MonoBehaviour
     [Glue(nameof(ConstantFactors))]
     public partial float ConstantFactor { get; set; } = 3.8f;
 
+    // Automatically resolves Bust friendly Bar AmbiHandles
     [Glue(nameof(BarHandles))]
     public List<Bar> Bars = [];
 
-    [Readback(nameof(CurrentVolumes))]
+    // DOD value that can be read back with the promise that it's ready after a specified JobHandle
+    [Readback(nameof(CurrentVolumes), After = nameof(PromisedCompletionHandle))]
     public partial float CurrentVolume { get; }
+
+    static partial void OnColumnsAllocated(int capacity) { }
+
+    static partial void OnColumnsResized(int rowCount, int capacity) { }
+
+    static partial void OnColumnsDeallocating() { }
+
+    partial void OnRowLoaded(int row) { }
+
+    partial void OnRowSynced(int row) { }
+
+    partial void OnRowRemoved(int row, int lastRow) { }
 }
 
 [Ambi(Capacity = 150)]

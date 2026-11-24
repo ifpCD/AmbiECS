@@ -8,6 +8,7 @@ namespace AmbiECS;
 public static class AmbiColumn
 {
     // Reallocates to length, keeping what fits. Creates the column when it does not exist yet.
+    // todo: defer deallocation?
     public static void Resize<TValue>(ref this NativeArray<TValue> column, int length, Allocator allocator = Allocator.Persistent)
         where TValue : struct
     {
