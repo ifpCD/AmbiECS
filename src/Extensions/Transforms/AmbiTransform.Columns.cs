@@ -41,7 +41,7 @@ public sealed partial class AmbiTransform
     static partial void OnColumnsResized(int rowCount, int capacity)
     {
         DrivenTransforms.capacity = capacity;
-        DrivenRows.Resize(capacity);
+        DrivenRows.Resize(capacity, DrivenCount);
         Array.Resize(ref _driven, capacity);
     }
 

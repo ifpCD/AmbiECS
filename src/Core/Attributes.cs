@@ -28,6 +28,7 @@ public sealed class AmbiAttribute : Attribute
 [AttributeUsage(AttributeTargets.Field)]
 public sealed class InputAttribute : Attribute
 {
+    // >1: up to Stride handles per row, from a List<T> or T[] of an Ambi type, Null-padded. NativeArray<AmbiHandle> only
     public int Stride { get; set; } = 1;
 }
 
@@ -44,7 +45,7 @@ public sealed class StateAttribute : Attribute
 }
 
 // A buffer owned by jobs and not tied to rows: PerRow elements per row of capacity, following growth, or a fixed Length.
-// Never moved. NativeArray<T> or T[].
+// Never moved. PerRow is zeroed whenever allocated, Length is left uninitialized. NativeArray<T> or T[].
 [AttributeUsage(AttributeTargets.Field)]
 public sealed class ScratchAttribute : Attribute
 {
@@ -59,7 +60,7 @@ public sealed class ScratchAttribute : Attribute
 //   MarkDirty never re-reads it, so a value that is fixed for the row's life costs one write.
 // - untracked: any other member (a field, a computed property, a list changed in place) is re-read after MarkDirty(). A computed
 //   property reading tracked properties is also rewritten when they change, glued or marked [Track].
-// A List<T> or T[] fills a strided row, with handles when T is an Ambi type.
+// A List<T> or T[] of an Ambi type fills a strided row with handles.
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
 public sealed class GlueAttribute(string column) : Attribute
 {
@@ -73,6 +74,7 @@ public sealed class TrackAttribute : Attribute { }
 
 // Reads a get-only partial property back from its row of a column, completing the job graph first.
 // After names a JobHandle member to complete instead: a promise that the column is safe to read once that handle completes.
+// Strided [State] reads back as a ReadOnlySpan<T>.
 [AttributeUsage(AttributeTargets.Property)]
 public sealed class ReadbackAttribute(string column) : Attribute
 {

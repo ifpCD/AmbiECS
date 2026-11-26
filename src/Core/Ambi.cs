@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Unity.Collections;
 using Unity.Scripting.LifecycleManagement;
 
@@ -14,14 +16,14 @@ namespace AmbiECS;
 // tracked members left pending, plus every untracked member once marked dirty. Both run at the flush, write that row and nothing
 // else, and issue no requests.
 //
-// Capacity is where a type starts. The managed views grow at once; the columns, and the native mirror of the identity table,
-// grow only while the graph is idle, so growing never waits on a job. Types that can't grow throw at their caller instead.
+// Capacity is where a type starts. The managed views and the identity table grow at once; the columns grow only while the graph
+// is idle, so growing never waits on a job. Types that can't grow throw at their caller instead.
 // Columns are freed when a flush leaves a type empty, unless the type retains them.
 //
 // Identities: an AmbiHandle names an object from the first read of its Handle until it is destroyed, whatever its registration
 // in between. Its lookup entry holds its row or -1, and the version that retires the handle on destruction. Versions start at 1
-// (0 is Null) and outlive their slot, so a recycled slot never reissues a handle someone still holds. The identity table lives
-// until code unload.
+// (0 is Null) and outlive their slot, so a recycled slot never reissues a handle someone still holds. The identity table covers
+// every identity issued; outgrown tables are released at the next flush.
 //
 // Nothing is allocated per request, only when a view grows past its capacity.
 [NoAutoStaticsCleanup]
@@ -37,7 +39,8 @@ public static class Ambi<T>
     static int _capacity; // of the rows and columns, kept while they are deallocated so they come back at the same size
 
     static NativeArray<AmbiLookup.Entry> _identities;
-    static int[] _versions = []; // authoritative: the native mirror catches up while the graph is idle
+    static readonly List<NativeArray<AmbiLookup.Entry>> _retired = []; // outgrown, released at the next flush
+    static int[] _versions = []; // authoritative
     static int[] _freeIdentities = [];
     static int _freeIdentityCount;
     static int _nextIdentity;
@@ -45,7 +48,11 @@ public static class Ambi<T>
     static T[] _queue = [];
     static int _queueCount;
 
-    static Ambi() => AmbiScheduler.Enlist(Depart, Arrive, Dispose);
+    static Ambi()
+    {
+        AmbiScheduler.Enlist(Depart, Arrive, Dispose);
+        ReserveIdentities(NextCapacity(0));
+    }
 
     public static int RegisteredCount => _registeredCount;
 
@@ -102,15 +109,18 @@ public static class Ambi<T>
 
     // A tracked member changed while the graph ran: the object holds which columns are pending, the flush writes them.
     // An object without a row has nothing pending: creating its row writes it whole.
-    public static void MarkPending(T instance)
+    // setters pass the slot, skipping the interface call
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void MarkPending(T instance, ref AmbiSlot slot)
     {
-        ref AmbiSlot slot = ref instance.Slot;
-
-        if (slot.Registered < 0 || slot.SoAIndex < 0)
+        if ((slot.Registered | slot.SoAIndex) < 0)
             return;
 
         slot.Flags |= AmbiSlot.PENDING;
-        Settle(instance, ref slot);
+
+        // already queued, the flush picks it up
+        if ((slot.Flags & AmbiSlot.QUEUED) == 0)
+            Settle(instance, ref slot);
     }
 
     // Gone for good: OnDestroy for components, Release for plain objects. Its handle stops resolving at the next flush.
@@ -158,8 +168,8 @@ public static class Ambi<T>
         return 2 * length;
     }
 
-    // Code unload, once the graph is done: every object leaves, those still waiting to arrive included, and the identity table goes
-    // with the rows whatever handles are still out, since no code is left to resolve them.
+    // Code unload, once the graph is done: every object leaves, those still waiting to arrive included.
+    // The identity table is left to Unity, which frees it with the code.
     static void Dispose()
     {
         while (_registeredCount != 0)
@@ -175,9 +185,6 @@ public static class Ambi<T>
 
         if (_rows != null)
             DeallocateRows();
-
-        if (_identities.IsCreated)
-            _identities.Dispose();
     }
 
     // Out of Registered at once, by swap-back.
@@ -226,7 +233,10 @@ public static class Ambi<T>
     // arrivals' syncs read.
     static void Depart()
     {
-        MirrorIdentities();
+        foreach (NativeArray<AmbiLookup.Entry> table in _retired)
+            table.Dispose();
+
+        _retired.Clear();
 
         for (int i = 0; i < _queueCount; i++)
         {
@@ -259,8 +269,6 @@ public static class Ambi<T>
 
     static void Apply(T instance, ref AmbiSlot slot)
     {
-        MirrorIdentities();
-
         if (slot.SoAIndex >= 0 && Leaves(ref slot))
             RemoveRow(instance, ref slot);
 
@@ -331,7 +339,6 @@ public static class Ambi<T>
         _rows = new T[_capacity];
         T.AllocateColumns(_capacity);
         ReserveIdentities(_capacity);
-        MirrorIdentities();
     }
 
     static void GrowRows()
@@ -343,7 +350,6 @@ public static class Ambi<T>
         _capacity = capacity;
 
         ReserveIdentities(capacity);
-        MirrorIdentities();
     }
 
     static void DeallocateRows()
@@ -378,10 +384,7 @@ public static class Ambi<T>
             return;
 
         if (AmbiScheduler.IsIdle)
-        {
-            MirrorIdentities();
             MapIdentity(slot.Identity, slot.SoAIndex);
-        }
         else
             Settle(instance, ref slot);
     }
@@ -402,11 +405,15 @@ public static class Ambi<T>
         _freeIdentities[_freeIdentityCount++] = identity;
     }
 
-    // The native mirror is written while the graph is idle only, and is up to date then.
+    // graph idle only
     static void MapIdentity(int identity, int row) =>
-        _identities[identity] = new AmbiLookup.Entry { Row = row, Version = _versions[identity] };
+        AmbiColumn.At(_identities, identity) = new AmbiLookup.Entry
+        {
+            Row = row,
+            Version = _versions[identity],
+        };
 
-    // Managed only, so at any time: the native mirror follows at the next idle point.
+    // any time, jobs keep reading the table they were handed
     static void ReserveIdentities(int capacity)
     {
         int length = _versions.Length;
@@ -417,21 +424,22 @@ public static class Ambi<T>
         Array.Resize(ref _versions, capacity);
         Array.Resize(ref _freeIdentities, capacity);
         Array.Fill(_versions, 1, length, capacity - length); // versions start at 1: 0 is Null
-    }
 
-    // Brings the native mirror up to every identity reserved. Only while the graph is idle.
-    static void MirrorIdentities()
-    {
-        int length = _versions.Length;
-        int mirrored = _identities.IsCreated ? _identities.Length : 0;
+        NativeArray<AmbiLookup.Entry> table = new(
+            capacity,
+            Allocator.Domain,
+            NativeArrayOptions.UninitializedMemory
+        );
+        Span<AmbiLookup.Entry> entries = AmbiColumn.Block(table, 0, capacity);
 
-        if (mirrored >= length)
-            return;
+        if (length > 0)
+        {
+            AmbiColumn.Block(_identities, 0, length).CopyTo(entries);
+            _retired.Add(_identities);
+        }
 
-        _identities.Resize(length);
-
-        for (int i = mirrored; i < length; i++)
-            MapIdentity(i, AmbiSlot.NONE);
+        entries[length..].Fill(new AmbiLookup.Entry { Row = AmbiSlot.NONE, Version = 1 });
+        _identities = table;
     }
 
     // Mutation-tolerant, swap-back-aware walk over the registered objects, for main-thread code such as culling in

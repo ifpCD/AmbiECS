@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Jobs;
@@ -17,12 +18,13 @@ namespace AmbiECS.ReferenceDesign;
 // otherwise. MarkDirty() never re-reads it.
 // Untracked: any other member, re-read after MarkDirty(). A computed one is also rewritten when the tracked properties it reads change.
 // [Readback] reads a get-only partial property back from its row, after completing the graph, or only the JobHandle named by
-// After. Anything not annotated is yours, kept in the optional partial hooks:
+// After. Strided [State] reads back as a ReadOnlySpan<T>. Anything not annotated is yours, kept in the optional partial hooks:
 // OnColumnsAllocated, OnColumnsResized, OnColumnsDeallocating, OnRowLoaded, OnRowSynced and OnRowRemoved.
 [Ambi(Capacity = 10)]
 internal partial class Foo : MonoBehaviour
 {
     const int BAR_STRIDE = 15;
+    const int HISTORY = 4;
 
     public static JobHandle PromisedCompletionHandle;
 
@@ -38,6 +40,9 @@ internal partial class Foo : MonoBehaviour
     // Does not have an OOP input, but instance swap backs preserve the information between frames.
     [State(Default = 1f)]
     public static NativeArray<float> CurrentVolumes;
+
+    [State(Stride = HISTORY)]
+    public static NativeArray<float> VolumeHistories;
 
     // Manually managed via optional callbacks
     [Scratch(Length = 2048)]
@@ -62,6 +67,10 @@ internal partial class Foo : MonoBehaviour
     // DOD value that can be read back with the promise that it's ready after a specified JobHandle
     [Readback(nameof(CurrentVolumes), After = nameof(PromisedCompletionHandle))]
     public partial float CurrentVolume { get; }
+
+    // span over the row's block, valid until the next flush
+    [Readback(nameof(VolumeHistories), After = nameof(PromisedCompletionHandle))]
+    public partial ReadOnlySpan<float> VolumeHistory { get; }
 
     static partial void OnColumnsAllocated(int capacity) { }
 

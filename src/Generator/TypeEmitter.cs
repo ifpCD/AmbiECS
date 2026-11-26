@@ -106,16 +106,7 @@ static class TypeEmitter
         w.Open($"static void {contract}.AllocateColumns(int capacity)");
 
         foreach (ColumnModel column in columns)
-        {
-            w.Line(
-                column.Storage switch
-                {
-                    Storage.NativeArray => $"{column.Name} = new({Length(column)}, global::Unity.Collections.Allocator.Persistent);",
-                    Storage.ManagedArray => $"{column.Name} = new {column.Element}[{Length(column)}];",
-                    _ => $"{column.Name} = new({Length(column)});",
-                }
-            );
-        }
+            w.Line(Allocate(column));
 
         w.Line("OnColumnsAllocated(capacity);");
         w.Close();
@@ -128,10 +119,21 @@ static class TypeEmitter
             if (column.Kind == ColumnKind.Scratch && column.Length > 0)
                 continue; // a fixed length
 
+            if (column.Kind == ColumnKind.Scratch)
+            {
+                // per row scratch starts over, zeroed
+                if (column.Storage == Storage.NativeArray)
+                    w.Line($"{column.Name}.Dispose();");
+
+                w.Line(Allocate(column));
+                continue;
+            }
+
             w.Line(
                 column.Storage switch
                 {
-                    Storage.NativeArray => $"global::AmbiECS.AmbiColumn.Resize(ref {column.Name}, {Length(column)});",
+                    Storage.NativeArray =>
+                        $"global::AmbiECS.AmbiColumn.Resize(ref {column.Name}, {Length(column)}, {Times("rowCount", column.Stride)});",
                     Storage.ManagedArray => $"global::System.Array.Resize(ref {column.Name}, {Length(column)});",
                     _ => $"{column.Name}.capacity = {Length(column)};",
                 }
@@ -166,8 +168,8 @@ static class TypeEmitter
 
             w.Line(
                 column.Stride == 1
-                    ? $"{column.Name}[row] = {column.Initial};"
-                    : $"for (int i = row * {column.Stride}, end = i + {column.Stride}; i < end; i++) {column.Name}[i] = {column.Initial};"
+                    ? $"{Element(column, "row")} = {column.Initial};"
+                    : $"for (int i = row * {column.Stride}, end = i + {column.Stride}; i < end; i++) {Element(column, "i")} = {column.Initial};"
             );
         }
 
@@ -242,7 +244,7 @@ static class TypeEmitter
             {
                 w.Line(
                     column.Stride == 1
-                        ? $"{column.Name}[row] = {column.Name}[lastRow];"
+                        ? $"{Element(column, "row")} = {Element(column, "lastRow")};"
                         : $"global::AmbiECS.AmbiColumn.MoveBlock({column.Name}, lastRow, row, {column.Stride});"
                 );
             }
@@ -278,7 +280,7 @@ static class TypeEmitter
             if (property.Writes.Items.Length > 0)
             {
                 string pend = $"_ambiPending |= 0x{property.Mask:X}UL;";
-                string queue = $"{ambi}.MarkPending(this);";
+                string queue = $"{ambi}.MarkPending(this, ref _ambiSlot);";
 
                 w.Line();
 
@@ -314,13 +316,17 @@ static class TypeEmitter
         foreach (ReadbackModel readback in type.Readbacks.Items)
         {
             PartialModel declaration = readback.Declaration;
+            ColumnModel column = columns.First(candidate => candidate.Name == readback.Column);
+
+            // strided state reads back as a span over its block
+            string read = column.Stride > 1 ? $"global::AmbiECS.AmbiColumn.Block({column.Name}, row, {column.Stride})" : Element(column, "row");
 
             w.Line();
             w.Open($"{declaration.Modifiers} {declaration.Type} {readback.Member}");
             w.Open($"{declaration.GetModifiers}get");
             w.Line(readback.After is null ? "global::AmbiECS.AmbiScheduler.Complete();" : $"{readback.After}.Complete();");
             w.Line("int row = _ambiSlot.Row;");
-            w.Line($"return row < 0 ? default : {readback.Column}[row];");
+            w.Line($"return row < 0 ? default : {read};");
             w.Close();
             w.Close();
         }
@@ -390,24 +396,39 @@ static class TypeEmitter
     static string Write(GlueModel glue, ColumnModel column, string member)
     {
         if (!glue.Sequence)
-            return $"{column.Name}[row] = {Value(glue, member)};";
+            return $"{Element(column, "row")} = {Value(glue, member)};";
 
-        string write = glue.Targets ? "WriteHandles" : "WriteValues";
         string span = glue.IsList ? $"global::System.Runtime.InteropServices.CollectionsMarshal.AsSpan({member})" : member;
-        return $"global::AmbiECS.AmbiColumn.{write}<{glue.Element}>({column.Name}, row, {column.Stride}, {span});";
+        return $"global::AmbiECS.AmbiColumn.WriteHandles<{glue.Element}>({column.Name}, row, {column.Stride}, {span});";
     }
 
     static string Value(GlueModel glue, string member) => glue.Targets ? $"global::AmbiECS.Ambi<{glue.Element}>.HandleOf({member})" : member;
 
+    // native columns skip the indexer checks
+    static string Element(ColumnModel column, string index) =>
+        column.Storage == Storage.NativeArray ? $"global::AmbiECS.AmbiColumn.At({column.Name}, {index})" : $"{column.Name}[{index}]";
+
+    // rows are written whole on load and fixed scratch is the user's, so only per row scratch is zeroed
+    static string Allocate(ColumnModel column) =>
+        column.Storage switch
+        {
+            Storage.NativeArray when column.Kind == ColumnKind.Scratch && column.Length == 0 =>
+                $"{column.Name} = new({Length(column)}, global::Unity.Collections.Allocator.Persistent);",
+            Storage.NativeArray =>
+                $"{column.Name} = new({Length(column)}, global::Unity.Collections.Allocator.Persistent, global::Unity.Collections.NativeArrayOptions.UninitializedMemory);",
+            Storage.ManagedArray => $"{column.Name} = new {column.Element}[{Length(column)}];",
+            _ => $"{column.Name} = new({Length(column)});",
+        };
+
     static string Length(ColumnModel column)
     {
         if (column.Kind == ColumnKind.Scratch)
-            return column.Length > 0 ? column.Length.ToString(CultureInfo.InvariantCulture) : Times(column.PerRow);
+            return column.Length > 0 ? column.Length.ToString(CultureInfo.InvariantCulture) : Times("capacity", column.PerRow);
 
-        return Times(column.Stride);
+        return Times("capacity", column.Stride);
     }
 
-    static string Times(int factor) => factor == 1 ? "capacity" : $"capacity * {factor}";
+    static string Times(string count, int factor) => factor == 1 ? count : $"{count} * {factor}";
 
     sealed class CodeWriter
     {

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace AmbiECS;
 
@@ -15,16 +16,14 @@ public struct AmbiLookup
     [ReadOnly]
     public NativeArray<Entry> Entries;
 
+    // the table covers every issued handle, and identity 0 never matches Null
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryResolve(AmbiHandle handle, out int row)
+    public readonly unsafe bool TryResolve(AmbiHandle handle, out int row)
     {
-        if (handle.IsNull)
-        {
-            row = AmbiSlot.NONE;
-            return false;
-        }
-
-        Entry entry = Entries[handle.Index];
+        Entry entry = UnsafeUtility.ReadArrayElement<Entry>(
+            NativeArrayUnsafeUtility.GetUnsafeBufferPointerWithoutChecks(Entries),
+            handle.Index
+        );
         row = entry.Version == handle.Version ? entry.Row : AmbiSlot.NONE;
         return row >= 0;
     }

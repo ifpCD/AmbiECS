@@ -1,66 +1,80 @@
 using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace AmbiECS;
 
-// What generated code writes columns with, and what hand-kept buffers can use in the hooks. Only ever called while the graph is
-// idle; nothing here allocates but Resize.
-public static class AmbiColumn
+// Column access for generated code and hooks. Main thread, graph idle, so no NativeArray checks.
+public static unsafe class AmbiColumn
 {
-    // Reallocates to length, keeping what fits. Creates the column when it does not exist yet.
-    // todo: defer deallocation?
-    public static void Resize<TValue>(ref this NativeArray<TValue> column, int length, Allocator allocator = Allocator.Persistent)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ref TValue At<TValue>(in NativeArray<TValue> column, int index)
+        where TValue : struct =>
+        ref UnsafeUtility.ArrayElementAsRef<TValue>(
+            NativeArrayUnsafeUtility.GetUnsafeBufferPointerWithoutChecks(column),
+            index
+        );
+
+    // row's block of stride elements
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Span<TValue> Block<TValue>(in NativeArray<TValue> column, int row, int stride)
+        where TValue : struct => MemoryMarshal.CreateSpan(ref At(column, row * stride), stride);
+
+    // keeps the first `keep` elements, rest uninitialized. creates the column if missing
+    public static void Resize<TValue>(ref this NativeArray<TValue> column, int length, int keep)
         where TValue : struct
     {
-        NativeArray<TValue> resized = new(length, allocator);
+        NativeArray<TValue> resized = new(
+            length,
+            Allocator.Persistent,
+            NativeArrayOptions.UninitializedMemory
+        );
 
         if (column.IsCreated)
         {
-            NativeArray<TValue>.Copy(column, resized, Math.Min(column.Length, length));
+            Block(column, 0, keep).CopyTo(Block(resized, 0, keep));
             column.Dispose();
         }
 
         column = resized;
     }
 
-    // A row's block of stride elements moves to another row.
-    public static void MoveBlock<TValue>(NativeArray<TValue> column, int from, int to, int stride)
-        where TValue : struct => NativeArray<TValue>.Copy(column, from * stride, column, to * stride, stride);
+    // constant stride in generated code, so the copy unrolls
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void MoveBlock<TValue>(
+        in NativeArray<TValue> column,
+        int from,
+        int to,
+        int stride
+    )
+        where TValue : struct => Block(column, from, stride).CopyTo(Block(column, to, stride));
 
     public static void MoveBlock<TValue>(TValue[] column, int from, int to, int stride) =>
         Array.Copy(column, from * stride, column, to * stride, stride);
 
     // A row's references: the targets' handles front-packed in order, missing and destroyed ones skipped, the rest Null.
     // Jobs stop at the first Null; a target that leaves or is destroyed later is skipped by AmbiLookup instead.
-    public static void WriteHandles<TTarget>(NativeArray<AmbiHandle> column, int row, int stride, ReadOnlySpan<TTarget> targets)
+    public static void WriteHandles<TTarget>(
+        in NativeArray<AmbiHandle> column,
+        int row,
+        int stride,
+        ReadOnlySpan<TTarget> targets
+    )
         where TTarget : class, IAmbiRegistrant<TTarget>
     {
-        int slot = row * stride;
-        int end = slot + stride;
+        Span<AmbiHandle> block = Block(column, row, stride);
+        int count = 0;
 
-        for (int i = 0; i < targets.Length && slot < end; i++)
+        for (int i = 0; i < targets.Length && count < stride; i++)
         {
             AmbiHandle handle = Ambi<TTarget>.HandleOf(targets[i]);
 
             if (!handle.IsNull)
-                column[slot++] = handle;
+                block[count++] = handle;
         }
 
-        for (; slot < end; slot++)
-            column[slot] = AmbiHandle.Null;
-    }
-
-    // A row's values: the first stride of them in order, the rest default.
-    public static void WriteValues<TValue>(NativeArray<TValue> column, int row, int stride, ReadOnlySpan<TValue> values)
-        where TValue : struct
-    {
-        int start = row * stride;
-        int count = Math.Min(values.Length, stride);
-
-        for (int i = 0; i < count; i++)
-            column[start + i] = values[i];
-
-        for (int i = count; i < stride; i++)
-            column[start + i] = default;
+        block[count..].Clear();
     }
 }

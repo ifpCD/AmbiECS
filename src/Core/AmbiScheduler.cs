@@ -9,9 +9,14 @@ namespace AmbiECS;
 
 public interface IAmbiSystem
 {
-    void BeforeFlush() { }
+    // JobHandle Resolved { get; }
+
+    void BeforeFlush() { } // Final OOP Registration/Deregistration
+    void AfterFlush() { } // Data-Oriented Row Processing, ie. counts/offsets
 
     JobHandle Schedule();
+
+    void PostScheduleUpdate() { } // OOP Readback in the same frame
 }
 
 // Synchronization and scheduling engine
@@ -46,7 +51,7 @@ public static partial class AmbiScheduler
     static bool _busy;
     static bool _deferring;
 
-    static readonly IAmbiSystem[] _systems = new IAmbiSystem[8];
+    static IAmbiSystem[] _systems = new IAmbiSystem[32];
     static int _systemCount;
 
     // one entry per Ambi type, enlisted the first time the type is touched
@@ -65,7 +70,7 @@ public static partial class AmbiScheduler
             return;
 
         if (_systemCount == _systems.Length)
-            throw new InvalidOperationException($"More than {_systems.Length} Ambi systems subscribed.");
+            Array.Resize(ref _systems, 2 * _systemCount);
 
         _systems[_systemCount++] = system;
     }

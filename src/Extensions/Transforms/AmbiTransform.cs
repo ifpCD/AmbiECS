@@ -56,7 +56,7 @@ public sealed partial class AmbiTransform
     {
         _drivenIndex = DrivenCount;
         _driven[DrivenCount] = this;
-        DrivenRows[DrivenCount++] = Handle;
+        AmbiColumn.At(DrivenRows, DrivenCount++) = Handle;
         DrivenTransforms.Add(Target);
     }
 
@@ -67,7 +67,7 @@ public sealed partial class AmbiTransform
 
         _driven[index] = last;
         last._drivenIndex = index;
-        DrivenRows[index] = DrivenRows[DrivenCount];
+        AmbiColumn.At(DrivenRows, index) = AmbiColumn.At(DrivenRows, DrivenCount);
         _driven[DrivenCount] = null;
         DrivenTransforms.RemoveAtSwapBack(index);
 

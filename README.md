@@ -13,25 +13,26 @@ The scheduler manages data synchronization and provides a subsystem pattern to d
 ### Classes
 - `Ambi` makes a `partial` class, a component or a plain object, an Ambi type through source generation.
 ### Buffers
-- `Input` is a `Column` for OOP side authoring values and read-only access in the Job Graph.
-- `Scratch` is a effectively a persistently allocated scratchpad, sized either by the instance capacity, or a fixed length.
+- `Input` is a `Column` for OOP side authoring values and read-only access in the Job Graph. A strided `Input` holds up to `Stride` handles per row, from a list or array of an Ambi type.
+- `Scratch` is effectively a persistently allocated scratchpad, sized either by the class capacity (zeroed on growth), or a fixed length (left uninitialized).
 - `State` is a `Column` without an OOP value, that persists across the entirety of an instance's registration through swap backs.
 ### Properties
 - `Glue` is how you point an OOP property to an `Input Column`. If it's a property getter that's reading a `Track` property, it automatically synchronizes on change.
 - `Track` is used if a piece of data is a derivative to the value you want to use in the Job Graph without doing it in DOD.
-- `Readback` is a computed getter that lets you introspect into the Job Graph results on the main thread, at the cost of potentially waiting for job completion.
+- `Readback` is a computed getter that lets you introspect into the Job Graph results on the main thread, at the cost of waiting for a job completion. A strided `State` reads back as a `ReadOnlySpan<T>`.
 
 ## Classes
 
 - `Ambi<T>` keeps each type's rows tightly packed as objects come and go, and hands out their handles.
 - `AmbiScheduler` runs the frame: finishes last frame's jobs, applies changes and schedules systems.
-- `AmbiHandle` and `AmbiLookup` provide stable references between objects that jobs can resolve.
+- `AmbiHandle` and `AmbiLookup` provide stable references between objects that jobs can resolve with a single read.
 - `AmbiTransform` gives shared, parallel access to transforms.
 - `IAmbiSystem` is the interface to implement in order to schedule jobs each frame, and use the pre-flushing scheduler callback.
 
-## Roadmap
+## Caveats
 
-Inter-dependency chaining is not fully figured out yet.  
+a `Readback` `ReadOnlySpan<T>` reference is only valid until the next flush.  
+The scheduler subsystem architecture, including inter-dependency chaining is not fully figured out yet.  
 
 ## Implementation
 
@@ -40,6 +41,7 @@ Inter-dependency chaining is not fully figured out yet.
 internal partial class Foo : MonoBehaviour
 {
     const int BAR_STRIDE = 15;
+    const int HISTORY = 4;
 
     public static JobHandle PromisedCompletionHandle;
 
@@ -55,6 +57,9 @@ internal partial class Foo : MonoBehaviour
     // Does not have an OOP input, but instance swap backs preserve the information between frames.
     [State(Default = 1f)]
     public static NativeArray<float> CurrentVolumes;
+
+    [State(Stride = HISTORY)]
+    public static NativeArray<float> VolumeHistories;
 
     // Manually managed via optional callbacks
     [Scratch(Length = 2048)]
@@ -79,6 +84,10 @@ internal partial class Foo : MonoBehaviour
     // DOD value that can be read back with the promise that it's ready after a specified JobHandle
     [Readback(nameof(CurrentVolumes), After = nameof(PromisedCompletionHandle))]
     public partial float CurrentVolume { get; }
+
+    // span over the row's block, valid until the next flush
+    [Readback(nameof(VolumeHistories), After = nameof(PromisedCompletionHandle))]
+    public partial ReadOnlySpan<float> VolumeHistory { get; }
 
     static partial void OnColumnsAllocated(int capacity) { }
 
@@ -111,20 +120,22 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
 {
     static void AmbiECS.IAmbiRegistrant<Foo>.AllocateColumns(int capacity)
     {
-        TargetVolumes = new(capacity, Unity.Collections.Allocator.Persistent);
+        TargetVolumes = new(capacity, Unity.Collections.Allocator.Persistent, Unity.Collections.NativeArrayOptions.UninitializedMemory);
         ConstantFactors = new float[capacity];
-        BarHandles = new(capacity * 15, Unity.Collections.Allocator.Persistent);
-        CurrentVolumes = new(capacity, Unity.Collections.Allocator.Persistent);
-        ArbitraryScratch = new(2048, Unity.Collections.Allocator.Persistent);
+        BarHandles = new(capacity * 15, Unity.Collections.Allocator.Persistent, Unity.Collections.NativeArrayOptions.UninitializedMemory);
+        CurrentVolumes = new(capacity, Unity.Collections.Allocator.Persistent, Unity.Collections.NativeArrayOptions.UninitializedMemory);
+        VolumeHistories = new(capacity * 4, Unity.Collections.Allocator.Persistent, Unity.Collections.NativeArrayOptions.UninitializedMemory);
+        ArbitraryScratch = new(2048, Unity.Collections.Allocator.Persistent, Unity.Collections.NativeArrayOptions.UninitializedMemory);
         OnColumnsAllocated(capacity);
     }
 
     static void AmbiECS.IAmbiRegistrant<Foo>.ResizeColumns(int rowCount, int capacity)
     {
-        AmbiECS.AmbiColumn.Resize(ref TargetVolumes, capacity);
+        AmbiECS.AmbiColumn.Resize(ref TargetVolumes, capacity, rowCount);
         System.Array.Resize(ref ConstantFactors, capacity);
-        AmbiECS.AmbiColumn.Resize(ref BarHandles, capacity * 15);
-        AmbiECS.AmbiColumn.Resize(ref CurrentVolumes, capacity);
+        AmbiECS.AmbiColumn.Resize(ref BarHandles, capacity * 15, rowCount * 15);
+        AmbiECS.AmbiColumn.Resize(ref CurrentVolumes, capacity, rowCount);
+        AmbiECS.AmbiColumn.Resize(ref VolumeHistories, capacity * 4, rowCount * 4);
         OnColumnsResized(rowCount, capacity);
     }
 
@@ -135,15 +146,17 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
         ConstantFactors = null;
         BarHandles.Dispose();
         CurrentVolumes.Dispose();
+        VolumeHistories.Dispose();
         ArbitraryScratch.Dispose();
     }
 
     void AmbiECS.IAmbiRegistrant<Foo>.LoadRow(int row)
     {
-        CurrentVolumes[row] = (float)(1);
-        TargetVolumes[row] = TargetVolume;
+        AmbiECS.AmbiColumn.At(CurrentVolumes, row) = (float)(1);
+        for (int i = row * 4, end = i + 4; i < end; i++) AmbiECS.AmbiColumn.At(VolumeHistories, i) = default;
+        AmbiECS.AmbiColumn.At(TargetVolumes, row) = TargetVolume;
         ConstantFactors[row] = ConstantFactor;
-        AmbiECS.AmbiColumn.WriteHandles(BarHandles, row, 15, CollectionsMarshal.AsSpan(Bars));
+        AmbiECS.AmbiColumn.WriteHandles<Bar>(BarHandles, row, 15, CollectionsMarshal.AsSpan(Bars));
         _ambiPending = 0;
         OnRowLoaded(row);
     }
@@ -155,11 +168,11 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
 
         if (dirty)
         {
-            AmbiECS.AmbiColumn.WriteHandles(BarHandles, row, 15, CollectionsMarshal.AsSpan(Bars));
+            AmbiECS.AmbiColumn.WriteHandles<Bar>(BarHandles, row, 15, CollectionsMarshal.AsSpan(Bars));
         }
 
         if (dirty || (pending & 0x1UL) != 0)
-            TargetVolumes[row] = TargetVolume;
+            AmbiECS.AmbiColumn.At(TargetVolumes, row) = TargetVolume;
         if ((pending & 0x2UL) != 0)
             ConstantFactors[row] = ConstantFactor;
         OnRowSynced(row);
@@ -169,10 +182,11 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
     {
         if (row != lastRow)
         {
-            TargetVolumes[row] = TargetVolumes[lastRow];
+            AmbiECS.AmbiColumn.At(TargetVolumes, row) = AmbiECS.AmbiColumn.At(TargetVolumes, lastRow);
             ConstantFactors[row] = ConstantFactors[lastRow];
             AmbiECS.AmbiColumn.MoveBlock(BarHandles, lastRow, row, 15);
-            CurrentVolumes[row] = CurrentVolumes[lastRow];
+            AmbiECS.AmbiColumn.At(CurrentVolumes, row) = AmbiECS.AmbiColumn.At(CurrentVolumes, lastRow);
+            AmbiECS.AmbiColumn.MoveBlock(VolumeHistories, lastRow, row, 4);
         }
         OnRowRemoved(row, lastRow);
     }
@@ -188,7 +202,7 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
             field = value;
 
             _ambiPending |= 0x1UL;
-            AmbiECS.Ambi<Foo>.MarkPending(this);
+            AmbiECS.Ambi<Foo>.MarkPending(this, ref _ambiSlot);
         }
     }
 
@@ -203,7 +217,7 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
             field = value;
 
             _ambiPending |= 0x2UL;
-            AmbiECS.Ambi<Foo>.MarkPending(this);
+            AmbiECS.Ambi<Foo>.MarkPending(this, ref _ambiSlot);
         }
     }
 
@@ -213,7 +227,17 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
         {
             PromisedCompletionHandle.Complete();
             int row = _ambiSlot.Row;
-            return row < 0 ? default : CurrentVolumes[row];
+            return row < 0 ? default : AmbiECS.AmbiColumn.At(CurrentVolumes, row);
+        }
+    }
+
+    public partial ReadOnlySpan<float> VolumeHistory
+    {
+        get
+        {
+            PromisedCompletionHandle.Complete();
+            int row = _ambiSlot.Row;
+            return row < 0 ? default : AmbiECS.AmbiColumn.Block(VolumeHistories, row, 4);
         }
     }
 
