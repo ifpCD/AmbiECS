@@ -3,11 +3,20 @@
 AmbiECS is a hybrid ECS for Unity 7 (C# 14) that bridges MonoBehaviours with Burst-compiled job graphs.  
 
 Annotated classes and properties are tracked by a source generator that packs its data into the declared persistent SoA storage, tracking property changes, and managing generational handles.  
-The scheduler manages data synchronization and provides a subsystem pattern to deal with flushing, scheduling, and retrieving results.
+The scheduler manages data synchronization and provides a subsystem pattern to deal with custom flushing behaviour, arbitrary update job graph scheduling, and OOP result retrieval.  
+Unmanaged generational handles allow for inter-class cross-referencing in Burst-domain, automatically derived from main thread managed class references.
+
+## Thesis
+OOP MonoBehaviour-centric development is ergonomic and has a rich ecosystem. ECS is performant, but is oftentimes an architectural overkill for projects.  
+A proposal is to bridge the underlying performance boosters (Unity Jobs and Burst), whilst adhering to the MonoBehaviour pattern, allowing for targetted incremental upgrades in existing systems.  
+All lifecycle remains on the main thread, with hot update loops being rewritten using a centralized subsystem implementation.  
+The tradeoff is inherent buffer declaration and synchronization boilerplate, which is minimized by source generation, yet remains explicit.  
 
 ## Terminology
 - `Column` is a densely packed array annotated either with `[Input]`, `[State]`, or `[Scratch]`.
-- `Row` is an index within each `Column` for a given registered class instance, that may change during each flush.
+- `Row` is an index for a registed instance within a class-wide collections of `Column`s for element access inside jobs (may change during each flush).
+- `Flush` is the OOP to DOD row sorting and data synchronization stage in the frame that happens after PlayerLoop.Update, before IAmbiSystem job scheduling.
+- `Buffer` any arbitrary, persistently allocated array whose lifecycle is managed by AmbiECS.
 
 ## Annotations
 ### Classes
@@ -27,12 +36,13 @@ The scheduler manages data synchronization and provides a subsystem pattern to d
 - `AmbiScheduler` runs the frame: finishes last frame's jobs, applies changes and schedules systems.
 - `AmbiHandle` and `AmbiLookup` provide stable references between objects that jobs can resolve with a single read.
 - `AmbiTransform` gives shared, parallel access to transforms.
-- `IAmbiSystem` is the interface to implement in order to schedule jobs each frame, and use the pre-flushing scheduler callback.
+- `IAmbiSystem` is the interface to implement in order to schedule jobs each frame, with optional callbacks before the flush, after it, and after scheduling.
 
 ## Caveats
 
 a `Readback` `ReadOnlySpan<T>` reference is only valid until the next flush.  
 The scheduler subsystem architecture, including inter-dependency chaining is not fully figured out yet.  
+Same frame OOP readback can only occur in `IAmbiSystem.PostScheduleUpdate` or `LateUpdate`
 
 ## Implementation
 
@@ -180,6 +190,7 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
 
     void AmbiECS.IAmbiRegistrant<Foo>.RemoveRow(int row, int lastRow)
     {
+        OnRowRemoved(row, lastRow);
         if (row != lastRow)
         {
             AmbiECS.AmbiColumn.At(TargetVolumes, row) = AmbiECS.AmbiColumn.At(TargetVolumes, lastRow);
@@ -188,7 +199,6 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
             AmbiECS.AmbiColumn.At(CurrentVolumes, row) = AmbiECS.AmbiColumn.At(CurrentVolumes, lastRow);
             AmbiECS.AmbiColumn.MoveBlock(VolumeHistories, lastRow, row, 4);
         }
-        OnRowRemoved(row, lastRow);
     }
 
     public partial float Volume
@@ -240,6 +250,14 @@ partial class Foo : AmbiECS.IAmbiRegistrant<Foo>
             return row < 0 ? default : AmbiECS.AmbiColumn.Block(VolumeHistories, row, 4);
         }
     }
+
+    void OnEnable() => AmbiRegister();
+
+    void OnDisable() => AmbiDeregister();
+
+    void OnDestroy() => AmbiDestroy();
+
+    void OnValidate() => AmbiOnValidate();
 
     static partial void OnColumnsAllocated(int capacity);
 

@@ -20,9 +20,9 @@ public sealed partial class AmbiTransform
     [Scratch] internal static NativeArray<float3>     ReadPositions;
     [Scratch] internal static NativeArray<quaternion> ReadRotations;
     [Scratch] internal static NativeArray<float4x4>   ReadLocalToWorlds;
-    [Scratch] internal static NativeArray<float3>     Positions;
-    [Scratch] internal static NativeArray<quaternion> Rotations;
-    [Scratch] internal static NativeArray<float4x4>   LocalToWorlds;
+    [Scratch] public static NativeArray<float3>       Positions;
+    [Scratch] public static NativeArray<quaternion>   Rotations;
+    [Scratch] public static NativeArray<float4x4>     LocalToWorlds;
     [Scratch] internal static NativeArray<bool>       Follows;
     // csharpier-ignore-end
 

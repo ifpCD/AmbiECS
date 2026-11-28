@@ -4,8 +4,8 @@ namespace AmbiECS;
 
 public enum AmbiRegistration
 {
-    WhileEnabled, // components register in OnEnable and leave in OnDisable
-    Manual, // you call Register() and Deregister(), as for pooling or culling
+    WhileEnabled, // components register using MonoBehaviour callbacks
+    Manual,
 }
 
 // Makes a partial class an Ambi type: the generator implements IAmbiRegistrant<T> for it from its columns and glue, plus the

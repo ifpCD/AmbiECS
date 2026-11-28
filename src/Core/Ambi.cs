@@ -123,7 +123,6 @@ public static class Ambi<T>
             Settle(instance, ref slot);
     }
 
-    // Gone for good: OnDestroy for components, Release for plain objects. Its handle stops resolving at the next flush.
     public static void Destroy(T instance)
     {
         ref AmbiSlot slot = ref instance.Slot;

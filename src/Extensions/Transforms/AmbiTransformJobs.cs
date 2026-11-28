@@ -6,7 +6,7 @@ using UnityEngine.Jobs;
 
 namespace AmbiECS.Extensions.Jobs;
 
-[BurstCompile]
+[BurstCompile(DisableSafetyChecks = true)]
 internal struct ReadTransformsJob : IJobParallelForTransform
 {
     // csharpier-ignore-start
@@ -26,7 +26,7 @@ internal struct ReadTransformsJob : IJobParallelForTransform
     }
 }
 
-[BurstCompile]
+[BurstCompile(DisableSafetyChecks = true)]
 internal struct ResolveTransformsJob : IJobParallelFor
 {
     // csharpier-ignore-start
@@ -70,7 +70,7 @@ internal struct ResolveTransformsJob : IJobParallelFor
     }
 }
 
-[BurstCompile]
+[BurstCompile(DisableSafetyChecks = true)]
 internal struct WriteDrivenTransformsJob : IJobParallelForTransform
 {
     // csharpier-ignore-start

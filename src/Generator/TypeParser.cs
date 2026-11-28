@@ -372,7 +372,6 @@ static class TypeParser
         );
     }
 
-    // The messages a component needs and has not declared itself; a declared one calls into Ambi by hand.
     static ImmutableArray<MessageModel> Messages(INamedTypeSymbol type, bool manual)
     {
         ImmutableArray<MessageModel>.Builder messages = ImmutableArray.CreateBuilder<MessageModel>();
@@ -399,7 +398,6 @@ static class TypeParser
     static IMethodSymbol? Declared(INamedTypeSymbol type, string name) =>
         type.GetMembers(name).OfType<IMethodSymbol>().FirstOrDefault(method => method.Parameters.Length == 0 && !method.IsStatic);
 
-    // From the user's own base classes, down to UnityEngine.
     static IMethodSymbol? Inherited(INamedTypeSymbol type, string name)
     {
         for (INamedTypeSymbol? current = type.BaseType; current is not null && !In(current, "UnityEngine"); current = current.BaseType)

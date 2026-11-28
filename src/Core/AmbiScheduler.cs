@@ -12,14 +12,14 @@ public interface IAmbiSystem
     // JobHandle Resolved { get; }
 
     void BeforeFlush() { } // Final OOP Registration/Deregistration
-    void AfterFlush() { } // Data-Oriented Row Processing, ie. counts/offsets
+    void AfterFlush() { } // Data-Oriented Row Processing, ie. counts/offsets: rows are final, the graph is idle.
 
     JobHandle Schedule();
 
-    void PostScheduleUpdate() { } // OOP Readback in the same frame
+    void PostScheduleUpdate() { } // OOP Readback in the same frame before LateUpdate, the graph is actively running.
 }
 
-// Synchronization and scheduling engine
+// Data synchronization and scheduling engine
 // Main Thread OOP Update Loop deals with OOP classes for authoring/control.
 // Every time a registered OOP property changes (or the instance is manually marked as dirty) - we flag it.
 // At the end of the main thread update loop - we do all of the OOP->DOD work (removals, additions, synchronization)
@@ -32,7 +32,8 @@ public interface IAmbiSystem
 // Given certain Unity's editor callbacks not having a guaranteed point in the execution model (OnDrawGizmos for example):
 // One issue of deferred sync approach is that any kind of introspection into the ECS DOD state from an arbitrary thread at a random time will require us to pre-emptively complete the entire graph
 //
-// EarlyUpdate Force Finish Last Scheduled Graph -> Main Thread Update Loop -> Every IAmbiSystem.BeforeFlush() -> AmbiScheduler.Flush() -> Every IAmbiSystem.Schedule();
+// EarlyUpdate Force Finish Last Scheduled Graph -> Main Thread Update Loop -> Every IAmbiSystem.BeforeFlush() -> AmbiScheduler.Flush()
+// -> Every IAmbiSystem.AfterFlush() -> Every IAmbiSystem.Schedule() -> Every IAmbiSystem.PostScheduleUpdate(); and so on
 //
 // TODO: figure out a better inter-system JobHandle chaining pattern.
 [NoAutoStaticsCleanup]
@@ -45,7 +46,9 @@ public static partial class AmbiScheduler
 
     static readonly ProfilerMarker BeforeFlushMarker = new("Ambi.BeforeFlush");
     static readonly ProfilerMarker FlushMarker = new("Ambi.Flush");
+    static readonly ProfilerMarker AfterFlushMarker = new("Ambi.AfterFlush");
     static readonly ProfilerMarker ScheduleMarker = new("Ambi.Schedule");
+    static readonly ProfilerMarker PostScheduleMarker = new("Ambi.PostScheduleUpdate");
 
     static JobHandle _inFlight;
     static bool _busy;
@@ -105,7 +108,6 @@ public static partial class AmbiScheduler
         _registries[_registryCount++] = (depart, arrive, dispose);
     }
 
-    // A system that throws is logged and skipped, like a MonoBehaviour: one failure never stops the flush or the other systems.
     static void Frame()
     {
         if (!_deferring)
@@ -115,49 +117,41 @@ public static partial class AmbiScheduler
         Complete();
 
         using (BeforeFlushMarker.Auto())
-        {
-            for (int i = 0; i < _systemCount; i++)
-            {
-                IAmbiSystem system = _systems[i];
-
-                try
-                {
-                    system.BeforeFlush();
-                }
-                catch (Exception exception)
-                {
-                    Debug.LogException(exception, system as UnityEngine.Object);
-                }
-            }
-        }
+            Each(static system => system.BeforeFlush());
 
         using (FlushMarker.Auto())
             Flush();
 
-        JobHandle graph = default;
+        using (AfterFlushMarker.Auto())
+            Each(static system => system.AfterFlush());
 
         using (ScheduleMarker.Auto())
-        {
-            for (int i = 0; i < _systemCount; i++)
-            {
-                IAmbiSystem system = _systems[i];
+            Each(static system => _inFlight = JobHandle.CombineDependencies(_inFlight, system.Schedule()));
 
-                try
-                {
-                    graph = JobHandle.CombineDependencies(graph, system.Schedule());
-                }
-                catch (Exception exception)
-                {
-                    Debug.LogException(exception, system as UnityEngine.Object);
-                }
-            }
-        }
-
-        _inFlight = graph;
         _busy = true;
 
         // scheduled jobs sit in this thread's batch until flushed: start the graph now, not at the next engine flush
         JobHandle.ScheduleBatchedJobs();
+
+        using (PostScheduleMarker.Auto())
+            Each(static system => system.PostScheduleUpdate());
+    }
+
+    static void Each(Action<IAmbiSystem> step)
+    {
+        for (int i = 0; i < _systemCount; i++)
+        {
+            IAmbiSystem system = _systems[i];
+
+            try
+            {
+                step(system);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, system as UnityEngine.Object);
+            }
+        }
     }
 
     // Every type's departures land before any type's arrivals: a sync reading a Handle never finds the identity slots held by

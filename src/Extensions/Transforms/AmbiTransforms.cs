@@ -34,7 +34,7 @@ public static partial class AmbiTransformHandler
                 EvictUnheld();
 
             row = new AmbiTransform(transform, key);
-            row.Register();
+            row.AmbiRegister();
             _byTransform.Add(key, row);
         }
 
@@ -129,7 +129,7 @@ public static partial class AmbiTransformHandler
                 continue;
 
             _byTransform.Remove(row.Key);
-            row.Release();
+            row.AmbiDestroy();
         }
     }
 
@@ -140,7 +140,7 @@ public static partial class AmbiTransformHandler
     static void EndPlaying()
     {
         foreach (AmbiTransform row in AmbiTransform.Registered)
-            row.Release();
+            row.AmbiDestroy();
 
         _byTransform.Clear();
     }

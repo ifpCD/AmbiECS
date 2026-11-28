@@ -39,7 +39,7 @@ static class TypeEmitter
         Columns(w, type, contract);
         Rows(w, type, contract);
         Properties(w, type, ambi);
-        Messages(w, type, ambi);
+        Messages(w, type);
         Hooks(w);
         w.Close();
 
@@ -65,18 +65,26 @@ static class TypeEmitter
         w.Line();
         w.Line("public int Row => _ambiSlot.Row;");
         w.Line();
-        w.Line($"public void Register() => {ambi}.Register(this);");
+        w.Line($"public void AmbiRegister() => {ambi}.Register(this);");
         w.Line();
-        w.Line($"public void Deregister() => {ambi}.Deregister(this);");
+        w.Line($"public void AmbiDeregister() => {ambi}.Deregister(this);");
+        w.Line();
+        w.Line($"public void AmbiDestroy() => {ambi}.Destroy(this);");
+        w.Line();
+
+        // inspector, undo and animation edits skip the setters: every column is rewritten
+        if (type.HasPendingBits)
+        {
+            w.Open("public void AmbiValidate()");
+            w.Line("_ambiPending = ulong.MaxValue;");
+            w.Line($"{ambi}.MarkDirty(this);");
+            w.Close();
+        }
+        else
+            w.Line($"public void AmbiValidate() => {ambi}.MarkDirty(this);");
+
         w.Line();
         w.Line($"public void MarkDirty() => {ambi}.MarkDirty(this);");
-
-        if (!type.IsBehaviour)
-        {
-            w.Line();
-            w.Line($"public void Release() => {ambi}.Destroy(this);");
-        }
-
         w.Line();
         w.Line($"public static int RegisteredCount => {ambi}.RegisteredCount;");
         w.Line();
@@ -233,6 +241,9 @@ static class TypeEmitter
         w.Line();
         w.Open($"void {contract}.RemoveRow(int row, int lastRow)");
 
+        // the hook first, while row still holds the departing object's values
+        w.Line("OnRowRemoved(row, lastRow);");
+
         foreach (ColumnModel column in appended)
             w.Line($"{column.Name}.RemoveAtSwapBack(row);");
 
@@ -252,7 +263,6 @@ static class TypeEmitter
             w.Close();
         }
 
-        w.Line("OnRowRemoved(row, lastRow);");
         w.Close();
     }
 
@@ -332,40 +342,36 @@ static class TypeEmitter
         }
     }
 
-    static void Messages(CodeWriter w, TypeModel type, string ambi)
+    // Each undeclared message calls its Ambi event, as a declared one does by hand.
+    static void Messages(CodeWriter w, TypeModel type)
     {
         foreach (MessageModel message in type.Messages.Items)
         {
-            List<string> body = message.Name switch
+            string call = message.Name switch
             {
-                "OnEnable" => [$"{ambi}.Register(this);"],
-                "OnDisable" => [$"{ambi}.Deregister(this);"],
-                "OnDestroy" => [$"{ambi}.Destroy(this);"],
-                _ => [$"{ambi}.MarkDirty(this);"], // OnValidate: inspector, undo and animation edits skip the setters
+                "OnEnable" => "AmbiRegister();",
+                "OnDisable" => "AmbiDeregister();",
+                "OnDestroy" => "AmbiDestroy();",
+                _ => "AmbiValidate();", // OnValidate
             };
 
             bool editorOnly = message.Name == "OnValidate";
-
-            if (editorOnly && type.HasPendingBits)
-                body.Insert(0, "_ambiPending = ulong.MaxValue;");
 
             w.Line();
 
             if (editorOnly)
                 w.Directive("#if UNITY_EDITOR");
 
-            if (!message.Override && body.Count == 1)
-                w.Line($"void {message.Name}() => {body[0].TrimEnd(';')};");
+            if (!message.Override)
+                w.Line($"void {message.Name}() => {call}");
             else
             {
-                w.Open(message.Override ? $"{message.Accessibility} override void {message.Name}()" : $"void {message.Name}()");
+                w.Open($"{message.Accessibility} override void {message.Name}()");
 
                 if (message.CallBase)
                     w.Line($"base.{message.Name}();");
 
-                foreach (string line in body)
-                    w.Line(line);
-
+                w.Line(call);
                 w.Close();
             }
 

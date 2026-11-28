@@ -1,6 +1,8 @@
 <Project>
     <PropertyGroup>
-        <UnityEditorDir>C:\Program Files\Unity\Hub\Editor\7000.0.0a12</UnityEditorDir>
+        <UnityEditorDir>C:\Program Files\Unity\Hub\Editor\7000.0.0a22</UnityEditorDir>
         <UnityManaged>$(UnityEditorDir)\Editor\Data\Managed\UnityEngine</UnityManaged>
+        <UnityAnalyzers>$(UnityEditorDir)\Editor\Data\Tools\BuildPipeline\Unity.Analyzers</UnityAnalyzers>
+        <DebugBuildTestStage>C:\Users\mrimf\Documents\GitHub\Steam Audio Improvements\Assets\Plugins\AmbiECS</DebugBuildTestStage>
     </PropertyGroup>
 </Project>
